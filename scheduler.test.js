@@ -406,7 +406,7 @@ test('all features at once: core rules still hold', () => {
 
 const reviewWeeksOf = (w, unitId) => w.tasks.filter((t) => t.unitId === unitId && t.kind === 'review').map((t) => t.reviewWeek);
 
-test('readiness: weak weeks get extra review, ready weeks skip later reviews', () => {
+test('readiness: weak weeks get re-learning and exercises, ready weeks skip later reviews', () => {
   const state = exampleState();
   const before = generatePlan(state);
   // In Week 9 the spaced reviews are Weeks 8, 6 and 2.
@@ -414,19 +414,50 @@ test('readiness: weak weeks get extra review, ready weeks skip later reviews', (
   state.units[0].readiness = { 3: { v: 1, at: 4 }, 4: { v: 2, at: 5 }, 6: { v: 3, at: 7 } };
   const plan = generatePlan(state);
   const w9 = plan.weeks[8];
-  const reviewed = new Set(reviewWeeksOf(w9, 'eng'));
-  assert.ok(reviewed.has(3) && reviewed.has(4), `weak weeks reviewed: ${[...reviewed]}`);
-  assert.ok(!reviewed.has(6), 'Week 6 rated ready skips its 3-week review');
-  assert.ok(w9.tasks.some((t) => t.title === 'Rework: Week 3 topics'));
-  assert.ok(w9.tasks.some((t) => t.title === 'Shore up: Week 4 topics'));
-  const reviewH = (p) => p.weeks[8].tasks.filter((t) => t.unitId === 'eng' && t.kind === 'review').reduce((s, t) => s + t.hours, 0);
-  assert.ok(reviewH(plan) > reviewH(before), 'more review time overall');
-  const eng = w9.allocations.find((a) => a.unitId === 'eng');
-  assert.ok(eng.breakdown.readiness > 0);
-  assert.ok(eng.reasons.some((r) => r === 'You rated Week 3 not ready yet and Week 4 shaky, so those weeks get extra review.'));
+  const eng = w9.tasks.filter((t) => t.unitId === 'eng');
+  const titles = eng.map((t) => t.title);
+  // Not ready: re-learn the lecture, then exercises. Shaky: exercises.
+  assert.ok(titles.includes('Relearn Week 3: lecture & notes'), titles.join(' | '));
+  assert.ok(titles.includes('Exercises: Week 3'));
+  assert.ok(titles.includes('Exercises: Week 4'));
+  assert.ok(!titles.some((t) => /Relearn Week 4/.test(t)), 'shaky weeks are not re-learnt');
+  assert.ok(eng.filter((t) => t.recovery).every((t) => [3, 4].includes(t.reviewWeek)));
+  assert.ok(!eng.some((t) => t.kind === 'review' && t.reviewWeek === 6), 'Week 6 rated ready skips its 3-week review');
+  const recH = eng.filter((t) => t.recovery).reduce((s, t) => s + t.hours, 0);
+  assert.ok(recH >= 1.5, `meaningful recovery time: ${recH}h`);
+  const a = w9.allocations.find((x) => x.unitId === 'eng');
+  assert.ok(a.breakdown.readiness > 0);
+  assert.ok(a.reasons.includes('You rated Week 3 not ready yet and Week 4 shaky, so those weeks get re-learning and exercises.'));
   assert.ok(unitHours(plan, 'eng', [9, 10, 11, 12]) > unitHours(before, 'eng', [9, 10, 11, 12]));
+  // Recovery keeps coming each week until the rating improves.
+  assert.ok(plan.weeks[10].tasks.some((t) => t.unitId === 'eng' && t.title === 'Relearn Week 3: lecture & notes'));
 });
 
+test('readiness: a week rated not ready today is planned from today onwards', () => {
+  const state = exampleState();
+  const wk5 = buildWeeks(state.semester)[4];
+  state.units[0].readiness = { 2: { v: 1, at: 5 } };
+  const thursday = addDays(wk5.start, 3);
+  const plan = generatePlan(state, { currentWeek: 5, today: thursday, trackFromWeek: 5 });
+  const rec = plan.weeks[4].tasks.filter((t) => t.recovery);
+  assert.ok(rec.length >= 2, 'recovery tasks this week');
+  assert.ok(rec.every((t) => t.day >= 3), `on or after Thursday: ${rec.map((t) => t.day)}`);
+  assert.ok(rec.some((t) => /Relearn Week 2/.test(t.title)) && rec.some((t) => t.title === 'Exercises: Week 2'));
+  // Earlier weeks are not touched.
+  assert.ok(!plan.weeks[3].tasks.some((t) => t.recovery));
+  // Other work this week can still use earlier days.
+  assert.ok(plan.weeks[4].tasks.some((t) => !t.recovery && t.day < 3));
+});
+
+test('readiness: an improved rating starts next week, so this week keeps its tasks', () => {
+  const state = exampleState();
+  state.units[0].readiness = { 2: { v: 3, at: 6, prev: { v: 1, at: 5 } } };
+  assert.equal(readinessFor(state.units[0], 2, 5), 1);
+  assert.equal(readinessFor(state.units[0], 2, 6), 3);
+  const plan = generatePlan(state);
+  assert.ok(plan.weeks[4].tasks.some((t) => t.recovery && t.reviewWeek === 2), 'Week 5 still has recovery');
+  assert.ok(!plan.weeks[5].tasks.some((t) => t.recovery), 'Week 6 does not');
+});
 test('readiness: ratings only change the plan from the week they were made', () => {
   const state = exampleState();
   const before = generatePlan(state);
@@ -447,4 +478,47 @@ test('readiness: SWOTVAC revision starts with the weakest weeks', () => {
   assert.equal(rev.title, 'Revise weak spots: Laplace transforms and Week 9');
   assert.match(rev.reason, /You rated Weeks 5 and 9 not ready or shaky/);
   assert.ok(plan.unitSummaries[0].reasons.some((r) => /Week readiness: Week 9 shaky, Week 5 not ready yet\./.test(r)));
+});
+
+
+// ---------- Editing tasks ----------
+
+test('own tasks: placed on their date, planned work fits around them, reasons say so', () => {
+  const state = exampleState();
+  const before = generatePlan(state);
+  const wk3 = buildWeeks(state.semester)[2];
+  state.customTasks = [
+    { id: 'c-1', unitId: 'eng', date: addDays(wk3.start, 2), title: 'Redo tutorial 3', hours: 2, notes: 'Q4 to Q9' },
+    { id: 'c-2', unitId: null, date: addDays(wk3.start, 5), title: 'Club meeting prep', hours: 1 },
+  ];
+  const plan = generatePlan(state);
+  const w = plan.weeks[2];
+  const c1 = w.tasks.find((t) => t.id === 'c-1');
+  assert.equal(c1.day, 2);
+  assert.equal(c1.custom, true);
+  assert.equal(c1.notes, 'Q4 to Q9');
+  assert.equal(w.tasks.find((t) => t.id === 'c-2').code, 'Own');
+  assert.ok(w.allocated <= 20 + 1e-9, `week total ${w.allocated}`);
+  assert.equal(w.tasks.filter((t) => !t.custom).reduce((s, t) => s + t.hours, 0), 17, 'generated work shrinks by 3h');
+  const eng = w.allocations.find((a) => a.unitId === 'eng');
+  assert.ok(eng.reasons.some((r) => r === 'Includes your own task: "Redo tutorial 3" (2h).'));
+  assert.match(w.notes.join(' '), /Your own tasks take 3h of this week/);
+  assert.deepEqual(plan.weeks[1], before.weeks[1], 'other weeks unchanged');
+  // A missed own task with a unit rolls forward like any other work.
+  state.progress['c-1'] = { status: 'missed' };
+  const p2 = generatePlan(state);
+  assert.equal(p2.weeks.slice(3).reduce((s, x) => s + x.allocations.find((a) => a.unitId === 'eng').catchUp, 0), 2);
+});
+
+test('renamed tasks keep their id and plan; notes are attached', () => {
+  const state = exampleState();
+  const t = generatePlan(state).weeks[4].tasks[0];
+  state.taskEdits = { [t.id]: { title: 'Lecture 9 + my summary sheet', notes: 'Use the green notebook' } };
+  const plan = generatePlan(state);
+  const e = plan.weeks[4].tasks.find((x) => x.id === t.id);
+  assert.equal(e.title, 'Lecture 9 + my summary sheet');
+  assert.equal(e.plannedTitle, t.title);
+  assert.equal(e.notes, 'Use the green notebook');
+  assert.equal(e.hours, t.hours);
+  assert.equal(e.day, t.day);
 });

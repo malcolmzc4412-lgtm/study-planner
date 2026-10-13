@@ -33,6 +33,8 @@ export const READINESS = { 1: 'not yet', 2: 'shaky', 3: 'ready' };
 const REVIEW_WEIGHT = { 1: 2, 2: 1.5, 3: 0.5 };
 const READINESS_ORDER = (v) => (v === 1 ? 0 : v === 2 ? 1 : v == null ? 2 : 3);
 export const MAX_EXTRA_REVIEWS = 2;
+// Share of a unit's weekly hours spent re-learning weak weeks (capped).
+const RECOVERY = { learn: 0.15, practiceNotYet: 0.12, practiceShaky: 0.12, max: 0.45 };
 export const DEFAULT_TENTATIVE_WEEK = 14;
 export const PASS_MARK = 50;
 export const DEFAULT_PREFS = { studyDays: [true, true, true, true, true, true, true], dailyMax: null, sessionLength: SESSION_MAX, checkin: true };
@@ -171,9 +173,13 @@ export function examOutlook(unit) {
 export function readinessFor(unit, contentWeek, planWeek = Infinity) {
   const r = unit.readiness?.[contentWeek];
   if (r == null) return null;
-  const v = Number(typeof r === 'object' ? r.v : r);
-  const at = typeof r === 'object' && r.at != null ? Number(r.at) : -Infinity;
-  return v >= 1 && v <= 3 && at <= planWeek ? v : null;
+  const pick = (x) => {
+    const v = Number(typeof x === 'object' ? x.v : x);
+    const at = typeof x === 'object' && x.at != null ? Number(x.at) : -Infinity;
+    return v >= 1 && v <= 3 && at <= planWeek ? v : null;
+  };
+  // An improved rating can start next week; until then the previous rating still applies.
+  return pick(r) ?? (typeof r === 'object' && r.prev ? pick(r.prev) : null);
 }
 
 /** Teaching weeks before `planWeek` rated not yet / shaky, weakest (then most recent) first. */
@@ -395,7 +401,7 @@ function explainAllocation(r, n, H, weekInfo) {
     if (rd.notReady.length) bits.push(`${weekList(rd.notReady)} not ready yet`);
     if (rd.shaky.length) bits.push(`${weekList(rd.shaky)} shaky`);
     const many = rd.notReady.length + rd.shaky.length > 1;
-    reasons.push(`You rated ${bits.join(' and ')}, so ${many ? 'those weeks get' : 'that week gets'} extra review.`);
+    reasons.push(`You rated ${bits.join(' and ')}, so ${many ? 'those weeks get' : 'that week gets'} re-learning and exercises.`);
   }
   if (r.s.results) {
     const pct = Math.round(r.s.results.avg * 100);
@@ -496,23 +502,46 @@ export function buildTaskParts(alloc, unit, s, weekInfo, weeks) {
     const tbc = soon.due.tentative ? ' (date not announced yet, planned for now)' : '';
     spec.push({ key: `a-${soon.id}`, kind, w: frac, title, reason: `${soon.name} (${soon.weight}%) is ${when}${tbc}.`, assessmentId: soon.id, due: soon.due });
   }
+  // Weeks rated not yet / shaky get recovery work: re-learn the lecture, then do the exercises.
+  // These are planned from today onwards (see scheduleDays).
+  const weak = weakWeeks(unit, weeks, w).slice(0, MAX_EXTRA_REVIEWS);
+  const recovery = [];
+  for (const x of weak) {
+    const wk = x.wk.week;
+    const what = topicOf(unit, wk) || `Week ${wk}`;
+    if (x.v === 1) {
+      recovery.push({ key: `fix-l${wk}`, kind: 'learn', w: RECOVERY.learn, reviewWeek: wk, recovery: true,
+        title: topicOf(unit, wk) ? `Relearn: ${what} (lecture & notes)` : `Relearn Week ${wk}: lecture & notes`,
+        reason: `You rated Week ${wk} not ready yet, so go back over the lecture and notes first.` });
+      recovery.push({ key: `fix-p${wk}`, kind: 'practice', w: RECOVERY.practiceNotYet, reviewWeek: wk, recovery: true,
+        title: `Exercises: ${what}`,
+        reason: `Then work through the Week ${wk} tutorial or exercise problems to lock it in.` });
+    } else {
+      recovery.push({ key: `fix-p${wk}`, kind: 'practice', w: RECOVERY.practiceShaky, reviewWeek: wk, recovery: true,
+        title: `Exercises: ${what}`,
+        reason: `You rated Week ${wk} shaky, so extra exercises will firm it up.` });
+    }
+  }
+  // Each recovery task gets at least 30m when there is room, keeping 30m for an assessment due soon.
+  const recFrac = Math.min(RECOVERY.max, sum(recovery, (p) => p.w)) * (1 - sum(spec, (p) => p.w));
+  const allHalves = Math.round(h * 2);
+  const reserve = spec.length ? 1 : 0;
+  let recHalves = recovery.length ? Math.max(Math.round(allHalves * recFrac), Math.min(recovery.length, allHalves - reserve - 1)) : 0;
+  recHalves = Math.max(0, Math.min(recHalves, allHalves - reserve));
+  for (const p of splitHalves(recHalves / 2, recovery)) if (p.hours > 0) parts.push(p);
+  const hMain = (allHalves - recHalves) / 2;
   const rest = 1 - sum(spec, (p) => p.w);
-  // Spaced reviews at 1, 3 and 7 weeks (weeks rated ready skip the later ones),
-  // plus up to two extra weeks rated not yet / shaky. Weakest first so they survive when time is short.
-  const base = REVIEW_GAPS
+  // Spaced reviews at 1, 3 and 7 weeks. Weak weeks are covered by recovery work above;
+  // weeks rated ready skip the later reviews. Unrated first so they survive when time is short.
+  const sources = REVIEW_GAPS
     .map((g) => ({ g, wk: weeks[w - 1 - g] }))
     .filter((x) => x.wk && x.wk.type === 'teaching')
     .map((x) => ({ ...x, v: readinessFor(unit, x.wk.week, w) }))
-    .filter((x) => x.g === 1 || x.v !== 3);
-  const extra = weakWeeks(unit, weeks, w)
-    .filter((x) => !base.some((b) => b.wk.week === x.wk.week))
-    .slice(0, MAX_EXTRA_REVIEWS)
-    .map((x) => ({ g: w - x.wk.week, wk: x.wk, v: x.v }));
-  const sources = [...base, ...extra].sort((a, b) => READINESS_ORDER(a.v) - READINESS_ORDER(b.v));
-  const weakCount = sources.filter((x) => x.v === 1 || x.v === 2).length;
+    .filter((x) => x.v !== 1 && x.v !== 2 && (x.g === 1 || x.v !== 3))
+    .sort((a, b) => READINESS_ORDER(a.v) - READINESS_ORDER(b.v));
   const teaching = weekInfo.type === 'teaching';
   const learnW = teaching ? 0.45 : 0;
-  const reviewW = !sources.length ? 0 : teaching ? Math.min(0.35, 0.2 + 0.05 * weakCount) : Math.min(0.6, 0.5 + 0.05 * weakCount);
+  const reviewW = !sources.length ? 0 : teaching ? 0.2 : 0.5;
   const practiceW = 1 - learnW - reviewW;
   if (learnW) {
     const topic = topicOf(unit, w);
@@ -521,7 +550,7 @@ export function buildTaskParts(alloc, unit, s, weekInfo, weeks) {
   }
   spec.push({ key: 'practice', kind: 'practice', w: rest * practiceW, title: practiceTitle, reason: `Exam format is ${unit.exam?.format || 'calculations'}, so practise that style.` });
   // Spaced review: at least 0.5h per source when there is room, otherwise fewer sources.
-  const halves = Math.round(h * 2);
+  const halves = Math.round(hMain * 2);
   let reviewHalves = Math.round(halves * rest * reviewW);
   let usable = [];
   if (reviewW) {
@@ -533,10 +562,7 @@ export function buildTaskParts(alloc, unit, s, weekInfo, weeks) {
   const reviews = usable.map((src) => {
     const wkNo = src.wk.week;
     const topic = topicOf(unit, wkNo);
-    const what = topic || `Week ${wkNo} topics`;
     const base = { key: `r${wkNo}`, kind: 'review', w: REVIEW_WEIGHT[src.v] ?? 1, reviewWeek: wkNo };
-    if (src.v === 1) return { ...base, title: `Rework: ${what}`, reason: `You rated Week ${wkNo} not ready yet, so it gets extra review.` };
-    if (src.v === 2) return { ...base, title: `Shore up: ${what}`, reason: `You rated Week ${wkNo} shaky, so it gets a little extra review.` };
     return { ...base,
       title: topic ? `Review: ${topic}` : `Spaced review: Week ${wkNo} topics`,
       reason: `${plural(src.g, 'week')} since you learnt it${topic ? ` in Week ${wkNo}` : ''}, the right time to revisit.${src.v === 3 ? ' You rated it ready, so a quick check is enough.' : ''}` };
@@ -547,7 +573,7 @@ export function buildTaskParts(alloc, unit, s, weekInfo, weeks) {
 
 /**
  * Break parts into sessions and place them on days. Deterministic.
- * ctx: { allowedDays, dailyMax, sessionLength, edits: { taskId: { day, hours } }, free }
+ * ctx: { allowedDays, dailyMax, sessionLength, edits: { taskId: { day, hours, title, notes } }, free, preload[7] }
  *  - Tasks the student moved stay on their chosen day; the rest are planned around them.
  *  - Work for an assessment never lands after its due day.
  *  - Edited hours can only grow into the week's free hours.
@@ -567,7 +593,9 @@ export function scheduleDays(unitParts, weekInfo, ctx = {}) {
           id: `w${weekInfo.week}-${unit.id}-${p.key}-${i}`,
           unitId: unit.id, code: unit.code, week: weekInfo.week, kind: p.kind, title: p.title,
           hours: h, plannedHours: h, assessmentId: p.assessmentId || null, reason: p.reason, reviewWeek: p.reviewWeek ?? null,
+          recovery: !!p.recovery,
           latestDay: p.due && p.due.week === weekInfo.week ? p.due.day : 6,
+          earliestDay: p.recovery && ctx.todayDay != null ? ctx.todayDay : 0,
           dueOrder: p.due ? p.due.week * 7 + p.due.day : Infinity,
         });
       });
@@ -591,16 +619,23 @@ export function scheduleDays(unitParts, weekInfo, ctx = {}) {
       t.pinned = true;
       t.edited = true;
     }
+    if (e.title && String(e.title).trim()) {
+      t.plannedTitle = t.title;
+      t.title = String(e.title).trim();
+      t.edited = true;
+    }
+    if (e.notes && String(e.notes).trim()) t.notes = String(e.notes).trim();
   }
-  const load = Array(7).fill(0);
+  const load = Array.isArray(ctx.preload) ? ctx.preload.map(Number) : Array(7).fill(0);
   for (const t of sessions) if (t.pinned) load[t.day] += t.hours;
   const loose = sessions.filter((t) => !t.pinned)
-    .sort((a, b) => a.latestDay - b.latestDay || a.dueOrder - b.dueOrder || b.hours - a.hours || a.id.localeCompare(b.id));
+    .sort((a, b) => a.latestDay - b.latestDay || (b.earliestDay || 0) - (a.earliestDay || 0) || a.dueOrder - b.dueOrder || b.hours - a.hours || a.id.localeCompare(b.id));
   const queue = [...loose];
   while (queue.length) {
     const t = queue.shift();
-    let cands = allowed.filter((d) => d <= t.latestDay);
-    if (!cands.length) { cands = Array.from({ length: t.latestDay + 1 }, (_, d) => d); t.offDay = true; }
+    const lo = Math.min(t.earliestDay || 0, t.latestDay);
+    let cands = allowed.filter((d) => d >= lo && d <= t.latestDay);
+    if (!cands.length) { cands = Array.from({ length: t.latestDay - lo + 1 }, (_, i) => lo + i); t.offDay = true; }
     const fits = dailyMax ? cands.filter((d) => load[d] + t.hours <= dailyMax + EPS) : cands;
     if (dailyMax && !fits.length && !t.offDay) {
       // No day has room for the whole session: fill the roomiest day and carry the rest to another day.
@@ -624,7 +659,7 @@ export function scheduleDays(unitParts, weekInfo, ctx = {}) {
     load[best] += t.hours;
     if (t.offDay) t.reason += ' Placed on a non-study day: it is the only time before it is due.';
   }
-  for (const t of sessions) delete t.dueOrder;
+  for (const t of sessions) { delete t.dueOrder; delete t.earliestDay; }
   return sessions.sort((a, b) => a.day - b.day || a.code.localeCompare(b.code) || a.id.localeCompare(b.id));
 }
 
@@ -634,10 +669,12 @@ export function scheduleDays(unitParts, weekInfo, ctx = {}) {
  * Generate the full plan.
  * state.prefs: { studyDays[7], dailyMax, sessionLength }
  * state.blocked: ['YYYY-MM-DD', ...] one-off days off
- * state.taskEdits: { taskId: { day, hours } }
+ * state.taskEdits: { taskId: { day, hours, title, notes } }
+ * state.customTasks: [{ id, unitId|null, date, title, hours, notes }] the student's own tasks
  * state.progress: { taskId: { status: 'done'|'missed'|'partial', doneHours } }
  * opts.currentWeek: weeks before it count unfinished hours as rolled forward.
  * opts.trackFromWeek: weeks before this (e.g. before the app was set up) are never auto-rolled.
+ * opts.today: 'YYYY-MM-DD'. In the week containing it, recovery work is only planned from today on.
  */
 export function generatePlan(state, opts = {}) {
   const semester = state.semester;
@@ -660,13 +697,22 @@ export function generatePlan(state, opts = {}) {
   const outWeeks = [];
   for (const wi of weeks) {
     const requested = hoursForWeek(state, wi.week);
+    // The student's own tasks this week, placed on their dates.
+    const own = (state.customTasks || [])
+      .map((c) => ({ c, day: Math.round((parseISO(c.date) - parseISO(wi.start)) / 86400000) }))
+      .filter((x) => x.day >= 0 && x.day <= 6 && Number(x.c.hours) > 0);
+    const ownHours = sum(own, (x) => Number(x.c.hours));
     const daysOff = regular.filter((d) => blocked.has(addDays(wi.start, d)));
     const allowed = regular.filter((d) => !daysOff.includes(d));
-    const capRegular = prefs.dailyMax ? Math.min(requested, prefs.dailyMax * regular.length) : requested;
-    const H = !allowed.length ? 0 : prefs.dailyMax ? Math.min(requested, prefs.dailyMax * allowed.length) : capRegular;
+    const capFull = prefs.dailyMax ? Math.min(requested, prefs.dailyMax * regular.length) : requested;
+    const Hfull = !allowed.length ? 0 : prefs.dailyMax ? Math.min(requested, prefs.dailyMax * allowed.length) : capFull;
+    // Generated work fits around the student's own tasks.
+    const capRegular = Math.max(0, capFull - ownHours);
+    const H = Math.max(0, Hfull - ownHours);
     const notes = [];
-    if (prefs.dailyMax && capRegular < requested - EPS) {
-      notes.push(`Only ${fmtH(capRegular)} of your ${fmtH(requested)} fit: ${plural(regular.length, 'study day')} × ${fmtH(prefs.dailyMax)} max.`);
+    if (ownHours > 0) notes.push(`Your own tasks take ${fmtH(ownHours)} of this week, so the planned work fits around them.`);
+    if (prefs.dailyMax && capFull < requested - EPS) {
+      notes.push(`Only ${fmtH(capFull)} of your ${fmtH(requested)} fit: ${plural(regular.length, 'study day')} × ${fmtH(prefs.dailyMax)} max.`);
     }
 
     const scored = units.map((unit, rank) => ({ unit, rank, s: scoreUnit(unit, rank, n, wi, semester) }));
@@ -700,14 +746,39 @@ export function generatePlan(state, opts = {}) {
       unit: units[i],
       parts: buildTaskParts(a, units[i], scored[i].s, wi, weeks),
     }));
+    const dayOfToday = opts.today ? Math.round((parseISO(opts.today) - parseISO(wi.start)) / 86400000) : null;
+    const preload = Array(7).fill(0);
+    for (const x of own) preload[x.day] += Number(x.c.hours);
     const tasks = scheduleDays(unitParts, wi, {
       allowedDays: allowed, dailyMax: prefs.dailyMax, sessionLength: prefs.sessionLength,
-      edits: state.taskEdits, free: res.free,
+      edits: state.taskEdits, free: res.free, preload,
+      todayDay: dayOfToday != null && dayOfToday >= 0 && dayOfToday <= 6 ? dayOfToday : null,
     });
+
+    // Add the student's own tasks.
+    for (const { c, day } of own) {
+      const unit = units.find((u) => u.id === c.unitId) || null;
+      tasks.push({
+        id: c.id, unitId: unit ? unit.id : null, code: unit ? unit.code : 'Own', week: wi.week, kind: 'custom',
+        title: String(c.title || 'My task'), hours: Number(c.hours), plannedHours: Number(c.hours), day,
+        assessmentId: null, reason: 'Your own task.', reviewWeek: null, recovery: false, custom: true, latestDay: 6,
+        ...(c.notes ? { notes: String(c.notes) } : {}),
+      });
+    }
+    tasks.sort((a, b) => a.day - b.day || a.code.localeCompare(b.code) || a.id.localeCompare(b.id));
+    for (const a of allocations) {
+      const mine = own.filter((x) => x.c.unitId === a.unitId);
+      if (!mine.length) continue;
+      const h = sum(mine, (x) => Number(x.c.hours));
+      a.hours += h;
+      a.reasons[0] = a.reasons[0].replace(/gets [\d.]+m?h?:/, `gets ${fmtH(a.hours)}:`);
+      a.reasons.push(`Includes your own task${mine.length > 1 ? 's' : ''}: ${listAnd(mine.map((x) => `"${x.c.title}" (${fmtH(Number(x.c.hours))})`))}.`);
+    }
 
     // Keep allocations in step with any task hours the student edited.
     for (const a of allocations) {
       const total = sum(tasks.filter((t) => t.unitId === a.unitId), (t) => t.hours);
+      if (Math.abs(total - a.hours) < EPS) continue;
       const delta = Math.round((total - a.hours) * 100) / 100;
       if (Math.abs(delta) > EPS) {
         a.reasons[0] = a.reasons[0].replace(`gets ${fmtH(a.hours)}`, `gets ${fmtH(total)}`);
@@ -723,18 +794,18 @@ export function generatePlan(state, opts = {}) {
       const p = progress[t.id] || {};
       t.doneHours = p.status === 'done' ? t.hours : clamp(Number(p.doneHours) || 0, 0, t.hours);
       const left = t.hours - t.doneHours;
-      if (left > EPS && (p.status === 'missed' || past)) {
+      if (left > EPS && t.unitId && (p.status === 'missed' || past)) {
         addPending(Math.max(wi.week + 1, currentWeek ?? 0), t.unitId, left);
       }
     }
 
-    const allocated = sum(allocations, (a) => a.hours);
+    const allocated = sum(allocations, (a) => a.hours) + sum(own.filter((x) => !units.some((u) => u.id === x.c.unitId)), (x) => Number(x.c.hours));
     outWeeks.push({
       ...wi,
       requested,
-      available: H,
+      available: Hfull,
       allocated,
-      free: Math.max(0, Math.round((H - allocated) * 100) / 100),
+      free: Math.max(0, Math.round((Hfull - allocated) * 100) / 100),
       carriedIn: sum(Object.values(carryIn)),
       studyDays: allowed,
       daysOff,
@@ -798,7 +869,7 @@ export function summarizeUnits(plan, state) {
       if (rs.ready.length) bits.push(`${rs.ready.length} ready`);
       if (rs.shaky.length) bits.push(`${weekList(rs.shaky)} shaky`);
       if (rs.notReady.length) bits.push(`${weekList(rs.notReady)} not ready yet`);
-      reasons.push(`Week readiness: ${bits.join(', ')}.${rs.notReady.length || rs.shaky.length ? ' Weak weeks get extra review and lead your SWOTVAC revision.' : ''}`);
+      reasons.push(`Week readiness: ${bits.join(', ')}.${rs.notReady.length || rs.shaky.length ? ' Weak weeks get re-learning and exercises, and lead your SWOTVAC revision.' : ''}`);
     }
     if (Number(unit.minHours) > 0) reasons.push(`You asked for at least ${fmtH(Number(unit.minHours))} a week.`);
     if (unit.maxHours != null && unit.maxHours !== '') reasons.push(`You limited it to ${fmtH(Number(unit.maxHours))} a week.`);

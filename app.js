@@ -2,14 +2,14 @@
 import {
   generatePlan, defaultSemester, buildWeeks, weekForDate, hoursForWeek, resolveDue, scoreUnit,
   DAY_NAMES, ASSESSMENT_TYPES, mondayOf, addDays, isHurdled, tentativeWeekOf, confidenceFor, markPct,
-  normalizePrefs, SESSION_CHOICES, DEFAULT_TENTATIVE_WEEK,
+  normalizePrefs, SESSION_CHOICES, DEFAULT_TENTATIVE_WEEK, readinessFor,
 } from './scheduler.js';
 import { loadState, saveState, clearState, requestPersistence } from './db.js';
 
 const root = document.getElementById('app');
 let state = null;
 let plan = null;
-const ui = { tab: 'week', week: null, unitId: null, viewKey: '', open: {} };
+const ui = { tab: 'week', week: null, unitId: null, viewKey: '', open: {}, calDay: null, calMonth: null, calMode: 'month' };
 
 // ---------- Helpers ----------
 
@@ -28,7 +28,7 @@ function fmtDate(iso, opts = { day: 'numeric', month: 'short' }) {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString('en-AU', opts);
 }
-const unitColor = (u) => `--uc:var(--c${(u?.color ?? 0) % 10})`;
+const unitColor = (u) => (u ? `--uc:var(--c${(u.color ?? 0) % 10})` : '--uc:var(--label2)');
 const unitById = (id) => state.units.find((u) => u.id === id);
 const weeksInfo = () => buildWeeks(state.semester);
 const TYPE_SHORT = { teaching: 'Teaching', break: 'Break', swotvac: 'SWOTVAC', exam: 'Exams' };
@@ -46,7 +46,8 @@ function displayWeek() {
 function recompute() {
   const raw = rawCurrentWeek();
   const n = state.semester.weeks.length;
-  plan = generatePlan(state, { currentWeek: raw < 1 ? null : Math.min(raw, n + 1), trackFromWeek: state.onboarded ? (state.trackFrom ?? 1) : Math.max(1, raw) });
+  plan = generatePlan(state, { currentWeek: raw < 1 ? null : Math.min(raw, n + 1), trackFromWeek: state.onboarded ? (state.trackFrom ?? 1) : Math.max(1, raw), today: todayISO() });
+  calIndex = null;
 }
 
 async function commit() {
@@ -70,7 +71,8 @@ function toast(msg) {
 const svg = (d, extra = '') => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${d}</svg>`;
 const ICON = {
   week: svg('<path d="M9 6h11M9 12h11M9 18h11"/><path d="M3.5 6l1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5L7.5 17"/>'),
-  plan: svg('<rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4M7 13.5h3M14 13.5h3M7 17h3"/>'),
+  plan: svg('<path d="M4 6h10M4 12h16M4 18h7"/><circle cx="18" cy="6" r="2"/><circle cx="15" cy="18" r="2"/>'),
+  calendar: svg('<rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/><circle cx="8" cy="13.5" r="0.6" fill="currentColor"/><circle cx="12" cy="13.5" r="0.6" fill="currentColor"/><circle cx="16" cy="13.5" r="0.6" fill="currentColor"/><circle cx="8" cy="17" r="0.6" fill="currentColor"/><circle cx="12" cy="17" r="0.6" fill="currentColor"/>'),
   units: svg('<path d="M4 19.5V5a2 2 0 0 1 2-2h4v18H6a2 2 0 0 1-2-1.5z"/><path d="M10 3h4v18h-4M14 4.5l3.8-1 3.2 16.5-3.8.9z"/>'),
   settings: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
   chev: svg('<path d="M9 5l7 7-7 7"/>', 'class="chev" stroke-width="2.5"'),
@@ -101,6 +103,7 @@ function freshState() {
     units: [],
     progress: {},
     taskEdits: {},
+    customTasks: [],
     checkins: {},
   };
 }
@@ -112,7 +115,10 @@ function normalizeReadiness(r) {
   const out = {};
   for (const [k, x] of Object.entries(r)) {
     const v = Number(typeof x === 'object' && x ? x.v : x);
-    if (Number(k) >= 1 && v >= 1 && v <= 3) out[k] = { v, at: typeof x === 'object' && x.at != null ? Number(x.at) : null };
+    if (!(Number(k) >= 1 && v >= 1 && v <= 3)) continue;
+    out[k] = { v, at: typeof x === 'object' && x.at != null ? Number(x.at) : null };
+    const p = typeof x === 'object' && x.prev;
+    if (p && Number(p.v) >= 1 && Number(p.v) <= 3) out[k].prev = { v: Number(p.v), at: p.at != null ? Number(p.at) : null };
   }
   return out;
 }
@@ -142,6 +148,10 @@ function normalize(s) {
   }));
   out.progress = { ...(s.progress || {}) };
   out.taskEdits = { ...(s.taskEdits || {}) };
+  out.customTasks = Array.isArray(s.customTasks) ? s.customTasks
+    .filter((c) => c && c.id && /^\d{4}-\d{2}-\d{2}$/.test(c.date))
+    .map((c) => ({ id: String(c.id), unitId: c.unitId || null, date: c.date, title: String(c.title || 'My task').slice(0, 80),
+      hours: clamp(Number(c.hours) || 1, 0.25, 12), notes: String(c.notes || '').slice(0, 1000) })) : [];
   out.checkins = { ...(s.checkins || {}) };
   return out;
 }
@@ -196,10 +206,22 @@ function rateableWeeks() {
   return weeksInfo().filter((w) => w.type === 'teaching' && w.week <= raw);
 }
 const currentReadiness = (u, wk) => (u.readiness?.[wk] ? Number(u.readiness[wk].v) : null);
+/**
+ * Rate a week's content. A worse rating applies from today. A better one applies from next week,
+ * so recovery tasks already planned (and maybe done) this week stay where they are.
+ */
 function setReadiness(u, wk, v) {
+  const cw = clamp(rawCurrentWeek(), 1, state.semester.weeks.length);
   u.readiness = { ...(u.readiness || {}) };
-  if (!v) delete u.readiness[wk];
-  else u.readiness[wk] = { v, at: clamp(rawCurrentWeek(), 1, state.semester.weeks.length) };
+  const old = u.readiness[wk];
+  if (!v) { delete u.readiness[wk]; return; }
+  const nowV = readinessFor(u, wk, cw);
+  if (nowV != null && v > nowV) {
+    const prev = old && old.at != null && old.at > cw ? old.prev : old ? { v: old.v, at: old.at } : null;
+    u.readiness[wk] = { v, at: cw + 1, ...(prev ? { prev } : {}) };
+  } else {
+    u.readiness[wk] = { v, at: cw };
+  }
 }
 function readyStrip(u, extraStyle = '') {
   const ws = rateableWeeks();
@@ -246,7 +268,7 @@ function openReadiness(replace = false) {
         `<button type="button" data-action="rdBrush" data-v="${v}" aria-pressed="${rdBrush === v}">${READY_GLYPH[v]} ${READY_LABEL[v]}</button>`).join('')}</div>
       ${readinessGrid()}
       <button class="btn secondary" style="margin-top:14px" data-action="rdFillReady" ${unratedCount() ? '' : 'disabled'}>Mark the rest as ready</button>
-      <p class="section-footer">Tap a rated week again to clear it. Weeks marked "Not yet" or "Shaky" get extra review time and lead your SWOTVAC revision. Ratings change your plan from this week on.</p>`,
+      <p class="section-footer">Tap a rated week again to clear it. Weeks marked "Not yet" get re-learning and exercises from today; "Shaky" weeks get exercises. They lead your SWOTVAC revision too. Better ratings take effect next week, so this week's tasks stay put.</p>`,
   });
 }
 
@@ -303,7 +325,7 @@ function render() {
   else if (ui.tab === 'units' && ui.unitId && unitById(ui.unitId)) { html = renderUnitDetail(unitById(ui.unitId)); ui.viewKey = `unit-${ui.unitId}`; }
   else {
     ui.unitId = null;
-    html = { week: renderWeek, plan: renderPlan, units: renderUnits, settings: renderSettings }[ui.tab]();
+    html = { week: renderWeek, calendar: renderCalendar, plan: renderPlan, units: renderUnits, settings: renderSettings }[ui.tab]();
     ui.viewKey = ui.tab;
   }
   const changed = prevKey !== ui.viewKey;
@@ -314,6 +336,10 @@ function render() {
     window.scrollTo(0, 0);
   } else window.scrollTo(0, y);
   root.querySelectorAll('.reorder').forEach(enableReorder);
+  if (changed && ui.tab === 'calendar' && ui.calMode === 'list') {
+    const a = root.querySelector('.cal-anchor');
+    if (a) window.scrollTo(0, a.getBoundingClientRect().top + window.scrollY - (110 + (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-top')) || 0)));
+  }
   syncTabbar(!!root.querySelector('.screen:not(.no-tabs)'));
   onScroll();
 }
@@ -328,7 +354,7 @@ function shell({ title, body, left = '', right = '', tabs = true, sub = '' }) {
   </main>`;
 }
 
-const TABS = [['week', 'This Week'], ['plan', 'Plan'], ['units', 'Units'], ['settings', 'Settings']];
+const TABS = [['week', 'This Week'], ['calendar', 'Calendar'], ['plan', 'Plan'], ['units', 'Units'], ['settings', 'Settings']];
 
 /** The tab bar lives outside the re-rendered view so its glass pill can slide between tabs. */
 function syncTabbar(show) {
@@ -344,9 +370,14 @@ function syncTabbar(show) {
     document.body.append(bar);
   }
   bar.classList.toggle('hidden', !show);
+  const prevI = Number(bar.style.getPropertyValue('--i') || -1);
   document.body.classList.toggle('has-tabs', show);
   const i = Math.max(0, TABS.findIndex(([k]) => k === ui.tab));
   bar.style.setProperty('--i', i);
+  if (prevI >= 0 && prevI !== i) { // liquid squish while the lens travels
+    const pill = bar.querySelector('.tab-pill');
+    pill.classList.remove('moving'); void pill.offsetWidth; pill.classList.add('moving');
+  }
   bar.querySelectorAll('.tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === ui.tab)));
 }
 
@@ -432,6 +463,7 @@ function renderWeek() {
     ${banner}
     ${readyCard}
     ${w.tasks.length ? days : `<div class="empty">${w.available ? 'Nothing planned this week.' : 'No study hours this week.'}</div>`}
+    <div class="group" style="margin-top:12px"><button class="row action" data-action="addTask" data-date="${today >= w.start && today <= addDays(w.start, 6) ? today : w.start}">${ICON.plus}<span>Add your own task</span></button></div>
     <div class="section-header">Why This Split</div>
     <div class="group">${why || '<div class="empty">Add a unit to get a plan.</div>'}</div>
     <p class="section-footer">Tap a task to log progress, see why it's there, or move it.</p>`;
@@ -444,7 +476,9 @@ function taskRow(t) {
   const isDone = isComplete(t);
   const partial = !isDone && t.doneHours > 0;
   const sub = [esc(t.code), partial ? `${fmtH(t.doneHours)} of ${fmtH(t.hours)} done` : fmtH(t.hours)];
-  if (t.edited) sub.push(t.pinned ? 'moved' : 'edited');
+  if (t.custom) sub.push('your task');
+  else if (t.edited) sub.push(t.pinned ? 'moved' : 'edited');
+  if (t.notes) sub.push('📝 note');
   return `<div class="row task ${st || ''}" style="${unitColor(u)};--inset:56px">
     <button class="check ${isDone ? 'on' : partial ? 'half' : ''}" data-action="toggleTask" data-id="${t.id}" aria-pressed="${isDone}" aria-label="Done: ${esc(t.title)}"><span>${ICON.check}</span></button>
     <button class="grow" style="text-align:left;min-height:44px" data-action="openTask" data-id="${t.id}">
@@ -476,7 +510,7 @@ function openTaskSheet(id, replace = false) {
   const missLabel = st === 'missed' ? 'Undo missed' : t.doneHours > 0 ? 'I missed the rest' : 'I missed this';
   openSheet({
     replace,
-    title: esc(t.code),
+    title: t.custom ? 'Your Task' : esc(t.code),
     noSave: true,
     cancelLabel: 'Done',
     body: `
@@ -501,17 +535,211 @@ function openTaskSheet(id, replace = false) {
       </div>
       <p class="section-footer">Only the hours you didn't do move to later weeks. Anything unfinished when the week ends moves too.</p>
 
-      <div class="section-header">Change</div>
+      <div class="section-header">Edit</div>
       <div class="group">
+        <label class="row"><span>Title</span><input class="value" style="color:var(--label)" data-change="taskTitle" data-id="${id}" value="${esc(t.title)}" placeholder="${esc(t.plannedTitle || t.title)}" aria-label="Task title" maxlength="80"></label>
+        <label class="row" style="align-items:flex-start"><textarea class="field-input notes" data-change="taskNotes" data-id="${id}" rows="3" maxlength="1000" placeholder="Notes: which questions, page numbers, links…" aria-label="Notes">${esc(t.notes || '')}</textarea></label>
+        ${t.custom ? `<label class="row"><span>Unit</span><select class="value" data-change="customUnit" data-id="${id}" aria-label="Unit">
+          <option value="">No unit</option>${state.units.map((x) => `<option value="${x.id}" ${x.id === t.unitId ? 'selected' : ''}>${esc(x.code)}</option>`).join('')}</select></label>` : ''}
         <div class="row"><div class="seg" role="group" aria-label="Day">${days}</div></div>
         <div class="row"><span class="grow">Length</span>
           <span class="tnum" style="font-weight:600">${fmtH(t.hours)}</span>
           <span class="stepper"><button data-action="taskHours" data-id="${id}" data-d="-0.5" aria-label="Shorter" ${t.hours <= 0.5 ? 'disabled' : ''}>−</button><button data-action="taskHours" data-id="${id}" data-d="0.5" aria-label="Longer" ${t.hours + 0.5 > maxHours + 1e-9 ? 'disabled' : ''}>+</button></span></div>
-        ${t.edited ? `<button class="row action" data-action="taskReset" data-id="${id}">Reset to the plan</button>` : ''}
+        ${t.custom ? `<button class="row destructive" data-action="deleteCustom" data-id="${id}">Delete this task</button>`
+          : t.edited || t.notes ? `<button class="row action" data-action="taskReset" data-id="${id}">Reset to the plan</button>` : ''}
       </div>
-      <p class="section-footer">${t.latestDay < 6 && a ? `Must be done by ${DAY_NAMES[t.latestDay]}, when ${esc(a.name)} is due. ` : ''}A moved task stays on its day and the rest of the week is planned around it. Shortening a task doesn't move hours elsewhere. A task can only grow into this week's free time (${w.free > 0 ? fmtH(w.free) : 'none left'}).</p>`,
+      <p class="section-footer">${t.latestDay < 6 && a ? `Must be done by ${DAY_NAMES[t.latestDay]}, when ${esc(a.name)} is due. ` : ''}${t.custom ? 'Your own tasks use part of this week\'s hours, and the planned work fits around them.' : 'Rename it and add notes to suit how you study. A moved task stays on its day and the rest of the week is planned around it. Shortening a task doesn\'t move hours elsewhere.'} A task can only grow into this week's free time (${w.free > 0 ? fmtH(w.free) : 'none left'}).</p>`,
   });
 }
+
+function addTaskSheet(date) {
+  const { start, end } = semesterRange();
+  const d = date && date >= start && date <= end ? date : defaultCalDay();
+  openSheet({
+    title: 'New Task',
+    saveLabel: 'Add',
+    body: `
+      <div class="group" style="margin-top:8px">
+        <label class="row"><span>Title</span><input class="value" style="color:var(--label)" name="title" placeholder="e.g. Redo tutorial 3" maxlength="80" aria-label="Task title"></label>
+        <label class="row"><span>Unit</span><select class="value" name="unit" aria-label="Unit"><option value="">No unit</option>
+          ${state.units.map((u) => `<option value="${u.id}">${esc(u.code)}</option>`).join('')}</select></label>
+        <label class="row"><span class="grow">Date</span><input type="date" name="date" value="${d}" min="${start}" max="${end}" aria-label="Date"></label>
+        <label class="row"><span class="grow">Length</span><input class="value tnum" style="max-width:90px" type="number" inputmode="decimal" min="0.25" max="12" step="0.25" name="hours" value="1" aria-label="Hours">h</label>
+        <label class="row" style="align-items:flex-start"><textarea class="field-input notes" name="notes" rows="3" maxlength="1000" placeholder="Notes (optional)" aria-label="Notes"></textarea></label>
+      </div>
+      <p class="section-footer">Your own tasks show up in This Week and the Calendar. They use part of that week's hours, and the planned work fits around them.</p>`,
+    onSave: (sheet) => {
+      const f = (n) => sheet.querySelector(`[name="${n}"]`);
+      const title = f('title').value.trim();
+      if (!title) { toast('Give the task a title'); return false; }
+      const date = f('date').value;
+      if (!date || date < start || date > end) { toast('Pick a date in the semester'); return false; }
+      const hours = clamp(Number(f('hours').value) || 1, 0.25, 12);
+      state.customTasks = [...state.customTasks, { id: `c-${uid()}`, unitId: f('unit').value || null, date, title, hours, notes: f('notes').value.trim() }];
+      commit();
+      toast('Task added');
+    },
+  });
+}
+
+// ---------- Calendar ----------
+
+let calIndex = null;
+
+/** date -> { tasks, due: [{ u, a }] } across the whole plan. */
+function calendarIndex() {
+  if (calIndex) return calIndex;
+  const idx = new Map();
+  const at = (d) => { if (!idx.has(d)) idx.set(d, { tasks: [], due: [] }); return idx.get(d); };
+  for (const w of plan.weeks) for (const t of w.tasks) at(addDays(w.start, t.day)).tasks.push(t);
+  for (const u of state.units) {
+    for (const a of u.assessments) {
+      const d = resolveDue(a, state.semester);
+      at(addDays(state.semester.startDate, (d.week - 1) * 7 + d.day)).due.push({ u, a, tentative: d.tentative });
+    }
+  }
+  calIndex = idx;
+  return idx;
+}
+
+const monthOf = (iso) => iso.slice(0, 7);
+function shiftMonth(ym, d) {
+  const [y, m] = ym.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1 + d, 1));
+  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}`;
+}
+function semesterRange() {
+  const start = state.semester.startDate;
+  return { start, end: addDays(start, state.semester.weeks.length * 7 - 1) };
+}
+function defaultCalDay() {
+  const t = todayISO();
+  const { start, end } = semesterRange();
+  return t < start ? start : t > end ? end : t;
+}
+
+function calDots(entry) {
+  if (!entry) return '';
+  const seen = new Map();
+  for (const t of entry.tasks) {
+    const prev = seen.get(t.unitId);
+    const done = isComplete(t);
+    seen.set(t.unitId, prev == null ? done : prev && done);
+  }
+  const dots = [...seen].slice(0, 3).map(([id, done]) => `<i class="${done ? 'done' : ''}" style="${unitColor(id ? unitById(id) : null)}"></i>`).join('');
+  const due = entry.due.slice(0, 2).map(({ u, tentative }) => `<span class="${tentative ? 'tbc' : ''}" style="${unitColor(u)}">${ICON.diamond}</span>`).join('');
+  return dots + due;
+}
+
+function calDayPanel(iso) {
+  const entry = calendarIndex().get(iso);
+  const tasks = entry?.tasks || [];
+  const due = entry?.due || [];
+  const wk = weekForDate(state.semester, iso);
+  const inSem = wk >= 1 && wk <= state.semester.weeks.length;
+  const dow = (new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7;
+  const off = state.blocked.includes(iso);
+  const rest = !state.prefs.studyDays[dow];
+  const hours = tasks.reduce((s, t) => s + t.hours, 0);
+  const done = tasks.reduce((s, t) => s + (t.doneHours || 0), 0);
+  const dueRows = due.map(({ u, a, tentative }) => `<button class="row tappable" data-action="editAssessment" data-unit="${u.id}" data-id="${a.id}" style="${unitColor(u)};--inset:44px">
+      <span class="marker ${tentative ? 'tbc' : ''}" style="padding:4px 6px">${ICON.diamond}</span>
+      <span class="grow"><div class="title">${esc(u.code)} ${esc(a.name)} due</div><div class="sub">${cap(a.type)} · ${a.weight}%${tentative ? ' · date TBC, planned here for now' : ''}${a.done ? ' · finished' : ''}</div></span>${ICON.chev}</button>`).join('');
+  let empty = '';
+  if (!tasks.length) empty = !inSem ? 'Outside the semester.' : off ? 'Day off. Nothing planned.' : rest ? 'Not a study day.' : 'Nothing planned.';
+  return `
+    <div class="section-header"><span>${fmtDate(iso, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+      <span class="tnum">${inSem ? `Week ${wk}` : ''}${hours ? ` · ${done ? `${fmtH(done)} of ` : ''}${fmtH(hours)}` : ''}</span></div>
+    ${dueRows ? `<div class="group" style="margin-bottom:10px">${dueRows}</div>` : ''}
+    ${tasks.length ? `<div class="group">${tasks.map(taskRow).join('')}</div>` : `<div class="group"><div class="empty" style="padding:20px">${empty}</div></div>`}
+    ${inSem ? `<div class="group" style="margin-top:10px"><button class="row action" data-action="addTask" data-date="${iso}">${ICON.plus}<span>Add a task on this day</span></button>
+      ${!rest ? `<button class="row action" data-action="toggleDayOff" data-date="${iso}">${off ? 'Make it a study day again' : 'Take this day off'}</button>` : ''}</div>` : ''}`;
+}
+
+function renderCalendar() {
+  const today = todayISO();
+  if (!ui.calDay) ui.calDay = defaultCalDay();
+  if (!ui.calMonth) ui.calMonth = monthOf(ui.calDay);
+  const ym = ui.calMonth;
+  const [y, m] = ym.split('-').map(Number);
+  const first = `${ym}-01`;
+  const lead = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7;
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const gridStart = addDays(first, -lead);
+  const rows = Math.ceil((lead + daysInMonth) / 7);
+  const idx = calendarIndex();
+  const n = state.semester.weeks.length;
+  const title = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-AU', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+  let grid = `<span></span>${['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d) => `<span class="cal-dow">${d}</span>`).join('')}`;
+  for (let r = 0; r < rows; r++) {
+    const monday = addDays(gridStart, r * 7);
+    const wk = weekForDate(state.semester, monday);
+    grid += `<span class="cal-wk" aria-hidden="true">${wk >= 1 && wk <= n ? `W${wk}` : ''}</span>`;
+    for (let d = 0; d < 7; d++) {
+      const iso = addDays(monday, d);
+      const other = monthOf(iso) !== ym;
+      const off = state.blocked.includes(iso);
+      const entry = idx.get(iso);
+      const cls = [other ? 'other' : '', iso === today ? 'today' : '', iso === ui.calDay ? 'sel' : '', off ? 'off' : ''].join(' ');
+      const count = entry?.tasks.length || 0;
+      grid += `<button class="cal-day ${cls}" data-action="calPick" data-date="${iso}"
+        aria-label="${fmtDate(iso, { weekday: 'long', day: 'numeric', month: 'long' })}${count ? `, ${count} task${count === 1 ? '' : 's'}` : ''}${entry?.due.length ? `, ${entry.due.length} due` : ''}${off ? ', day off' : ''}"
+        aria-pressed="${iso === ui.calDay}"><b>${Number(iso.slice(8))}</b><span class="cal-dots">${calDots(entry)}</span></button>`;
+    }
+  }
+
+  let body;
+  if (ui.calMode === 'list') {
+    let list = '';
+    let anchorPlaced = false;
+    for (let i = 0; i < daysInMonth; i++) {
+      const iso = addDays(first, i);
+      const entry = idx.get(iso);
+      const anchor = !anchorPlaced && iso >= (monthOf(today) === ym ? today : first);
+      if (!entry?.tasks.length && !entry?.due.length && !anchor) continue;
+      if (anchor) anchorPlaced = true;
+      list += `<div class="${anchor ? 'cal-anchor' : ''}">${calDayPanel(iso).replace(/<div class="group" style="margin-top:10px"><button class="row action" data-action="toggleDayOff"[\s\S]*?<\/div>\s*$/, '')}</div>`;
+    }
+    body = list || '<div class="empty">Nothing planned this month.</div>';
+  } else {
+    body = `<div class="cal-grid" data-swipe="month">${grid}</div>${calDayPanel(ui.calDay)}`;
+  }
+
+  return shell({
+    title: 'Calendar',
+    right: `<button class="nav-btn glass interactive" data-action="calToday" aria-label="Go to today">Today</button>`,
+    body: `
+      <div class="seg" role="group" aria-label="Calendar view" style="margin-bottom:14px">
+        <button data-action="calMode" data-v="month" aria-pressed="${ui.calMode !== 'list'}">Month</button>
+        <button data-action="calMode" data-v="list" aria-pressed="${ui.calMode === 'list'}">List</button></div>
+      <div class="cal-head">
+        <button class="round-btn glass interactive" data-action="calMonth" data-d="-1" aria-label="Previous month">${ICON.left}</button>
+        <div class="cal-title">${esc(title)}</div>
+        <button class="round-btn glass interactive" data-action="calMonth" data-d="1" aria-label="Next month">${ICON.right}</button>
+      </div>
+      ${body}`,
+  });
+}
+
+// Swipe left/right on the month grid to change month.
+let swipe = null;
+document.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('[data-swipe=month]')) swipe = { x: e.clientX, y: e.clientY };
+});
+document.addEventListener('pointerup', (e) => {
+  if (!swipe) return;
+  const dx = e.clientX - swipe.x;
+  const dy = e.clientY - swipe.y;
+  swipe = null;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+    ui.calMonth = shiftMonth(ui.calMonth, dx < 0 ? 1 : -1);
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 350);
+    render();
+  }
+});
+let suppressClick = false;
 
 // ---------- Plan ----------
 
@@ -1206,6 +1434,7 @@ function enableReorder(list) {
 
 // ---------- Events ----------
 
+const customById = (id) => (state.customTasks || []).find((c) => c.id === id);
 const editsFor = (id) => state.taskEdits[id] || {};
 function setEdit(id, patch) {
   const e = { ...editsFor(id), ...patch };
@@ -1254,7 +1483,11 @@ const actions = {
   },
   taskDay: (el) => {
     const { id, v } = el.dataset;
-    setEdit(id, { day: Number(v) });
+    const c = customById(id);
+    if (c) {
+      const t = findTask(id);
+      c.date = addDays(plan.weeks[t.week - 1].start, Number(v));
+    } else setEdit(id, { day: Number(v) });
     commit();
     openTaskSheet(id, true);
   },
@@ -1264,9 +1497,20 @@ const actions = {
     if (!t) return;
     const w = plan.weeks[t.week - 1];
     const h = clamp(t.hours + Number(el.dataset.d), 0.5, t.hours + w.free);
-    setEdit(id, { hours: Math.abs(h - t.plannedHours) < 1e-9 ? null : h });
+    const c = customById(id);
+    if (c) c.hours = h;
+    else setEdit(id, { hours: Math.abs(h - t.plannedHours) < 1e-9 ? null : h });
     commit();
     openTaskSheet(id, true);
+  },
+  addTask: (el) => addTaskSheet(el.dataset.date),
+  deleteCustom: (el) => {
+    const { id } = el.dataset;
+    state.customTasks = state.customTasks.filter((c) => c.id !== id);
+    delete state.progress[id];
+    closeSheet();
+    commit();
+    toast('Task deleted');
   },
   taskReset: (el) => {
     const { id } = el.dataset;
@@ -1303,6 +1547,20 @@ const actions = {
   setSession: (el) => { state.prefs = { ...state.prefs, sessionLength: Number(el.dataset.v) }; commit(); },
   openCheckin: () => openCheckin(),
   openReadiness: () => openReadiness(),
+  calPick: (el) => {
+    if (suppressClick) { suppressClick = false; return; }
+    ui.calDay = el.dataset.date;
+    if (monthOf(ui.calDay) !== ui.calMonth) ui.calMonth = monthOf(ui.calDay);
+    render();
+  },
+  calMonth: (el) => {
+    ui.calMonth = shiftMonth(ui.calMonth || monthOf(defaultCalDay()), Number(el.dataset.d));
+    const t = todayISO();
+    ui.calDay = monthOf(t) === ui.calMonth ? t : `${ui.calMonth}-01`;
+    render();
+  },
+  calToday: () => { ui.calDay = todayISO(); ui.calMonth = monthOf(ui.calDay); ui.viewKey = ''; render(); },
+  calMode: (el) => { ui.calMode = el.dataset.v; ui.viewKey = ''; render(); },
   rdBrush: (el) => {
     rdBrush = Number(el.dataset.v);
     el.closest('.rd-brush').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === el)));
@@ -1460,6 +1718,21 @@ const changes = {
     if (v) u.topics[el.dataset.week] = v; else delete u.topics[el.dataset.week];
     return 'quiet';
   },
+  taskTitle: (el) => {
+    const { id } = el.dataset;
+    const v = el.value.trim().slice(0, 80);
+    const c = customById(id);
+    if (c) { if (v) c.title = v; return; }
+    const t = findTask(id);
+    setEdit(id, { title: v && v !== (t?.plannedTitle || t?.title) ? v : null });
+  },
+  taskNotes: (el) => {
+    const { id } = el.dataset;
+    const v = el.value.trim().slice(0, 1000);
+    const c = customById(id);
+    if (c) c.notes = v; else setEdit(id, { notes: v || null });
+  },
+  customUnit: (el) => { const c = customById(el.dataset.id); if (c) c.unitId = el.value || null; },
   checkinOn: (el) => { state.prefs = { ...state.prefs, checkin: el.checked }; },
 };
 
@@ -1505,6 +1778,8 @@ function onScroll() {
     else if (y - lastScrollY > 6 && y > 120) bar.classList.add('mini');
   }
   lastScrollY = y;
+  // Drift the glass sheen a little as content moves underneath.
+  document.documentElement.style.setProperty('--glint', ((y / 900) % 1).toFixed(3));
   document.body.classList.toggle('scrolled', y > 36);
   const t = root.querySelector('.large-title');
   if (t) {
