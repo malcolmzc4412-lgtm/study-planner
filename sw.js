@@ -1,6 +1,6 @@
 // Service worker: caches every app file so Study Planner works offline.
 // Bump CACHE if you add or rename files so the precache list is refreshed.
-const CACHE = 'study-planner-v1';
+const CACHE = 'study-planner-v3';
 const FILES = [
   './',
   './index.html',

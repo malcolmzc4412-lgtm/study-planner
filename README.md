@@ -66,10 +66,31 @@ Your plan lives only on your phone. **Deleting the Home Screen app deletes its d
 ## Using it
 
 1. **Set-up** asks one thing per screen: semester dates (Monash's 12 teaching weeks + SWOTVAC + 3 exam weeks are filled in), hours per week and busy weeks, your units, a hardest-to-easiest ranking, then each unit's confidence, assessments and exam details.
-2. **This Week**: tasks grouped by day. Tick them off. Tap a task to see why it's there, or mark it **missed**. Missed hours move to later weeks as catch-up time; nothing is dropped. Anything left unticked when a week ends also rolls forward.
-3. **Plan**: the whole semester at a glance, coloured by unit, with assessment markers. Tap a week to open it.
-4. **Units**: tap a unit to see its score breakdown, hours per week, assessments and the reasons behind its time.
-5. **Settings**: change semester weeks and hours, re-rank units, export/import a backup, or reset.
+2. **This Week**: tasks grouped by day. Tick them off. Tap a task to see why it's there, mark it **missed**, log **partial progress** ("did 1h of 2h"), or **move it** to another day and change its length. Missed and unfinished hours move to later weeks as catch-up time; nothing is dropped. Tap a day chip to take that day **off**.
+3. **Plan**: the whole semester at a glance, coloured by unit, with assessment markers. Dashed **TBC** markers are assessments whose date isn't announced yet. Tap a week to open it.
+4. **Units**: tap a unit to see its score breakdown, hours per week, assessments and the reasons behind its time. Each unit can also have:
+   - **Hours limits**: at least / at most so many hours a week.
+   - **Weekly topics**: e.g. "W5: Laplace transforms", so tasks say "Review: Laplace transforms".
+   - **Results**: mark an assessment finished and enter your mark. Low marks give the unit more time. Once every non-exam mark is in, it tells you what you need on the exam to pass.
+5. **Settings**: semester weeks and hours, **study days**, a **max per day**, **session length** (45m–3h), **days off**, ranking, the **weekly check-in**, backup and reset.
+
+### Dates not announced yet
+
+Exam timetables come out late, so every new unit's Final exam starts as **Date not known yet**. Any assessment can be switched to this in its edit sheet. These are planned for **Week 14** for now (you can change that week in Settings → *Unknown dates go in*), shown under **Dates to confirm** on This Week, and marked TBC on the Plan. When you add the real date, the plan rebalances by itself.
+
+### Week readiness
+
+Rate how ready you feel for each week's content: **Not yet**, **Shaky** or **Ready**. Open it from the *Week Readiness* card on This Week, or from a unit's page.
+
+- Pick a colour, then **tap or drag down a column** to paint weeks. Tap a rated week again to clear it.
+- **Mark the rest as ready** fills every unrated week in one tap, so you only have to mark the weak ones.
+- The weekly check-in asks about last week's content with one tap per unit, and review tasks ask "How ready is Week N now?"
+
+Weeks rated *Not yet* or *Shaky* get extra spaced review ("Rework: …", "Shore up: …") and lead your SWOTVAC revision. Weeks rated *Ready* skip the later spaced reviews. A unit with weak weeks gets a little more time overall. Ratings only change the plan from the week you make them.
+
+### Weekly check-in
+
+The first time you open the app each week, it asks how confident you feel in each unit (1–5). The plan changes from that week on; earlier weeks keep what you said at the time. You can skip it, turn it off, or check in any time from Settings.
 
 ## How the scheduler decides
 
@@ -84,6 +105,8 @@ Each week, every unit gets a **priority score**:
 | Assessment weight | +2 per 100% of weight still to come |
 | Urgency | Ramps up over the 3 weeks before each assessment (25% → 50% → 80% → 100%) |
 | Hurdle | A hurdled exam counts 1.5× |
+| Your marks | Average below 70% adds up to +1.5; well above it takes off up to 0.75 (only after the marked assessment) |
+| Week readiness | +0.5 per week rated "not yet", +0.25 per "shaky", −0.1 per "ready" (between −0.5 and +2) |
 
 Then these rules apply:
 
@@ -94,7 +117,9 @@ Then these rules apply:
 5. Work for an assessment is **never scheduled after its due date**.
 6. Hours become tasks: learn new content, practice problems, assignment work, past papers, and **spaced review** of topics from 1, 3 and 7 weeks earlier.
 7. In **SWOTVAC and exam weeks** time goes to past papers and revision, ordered by exam date. A unit whose exams are finished gets no more time.
-8. The weekly total never exceeds the hours you set.
+8. The weekly total never exceeds the hours you set, or what your study days × max per day can hold.
+9. Your own limits win: a unit's minimum and maximum hours, tasks you moved or resized, and days off are all respected, and the reasons say so.
+10. Finished assessments get no more time. An assessment with an unknown date is planned for the tentative week (default Week 14).
 
 ## For developers
 
@@ -115,7 +140,7 @@ Then open <http://localhost:8000>. On Windows, use `python` instead of `python3`
 | File | What it does |
 |---|---|
 | `index.html` | Page shell, iOS meta tags, manifest link |
-| `styles.css` | iOS 26 "Liquid Glass" styling, light and dark mode |
+| `styles.css` | iOS 26 Liquid Glass styling, light and dark mode. Glass is only used for the floating tab bar, bar buttons, controls, sheets and toasts. Respects Reduce Transparency, Increase Contrast and Reduce Motion. |
 | `app.js` | Screens, onboarding, sheets, events |
 | `scheduler.js` | The planning engine (pure functions, no DOM) |
 | `db.js` | IndexedDB storage and `navigator.storage.persist()` |
