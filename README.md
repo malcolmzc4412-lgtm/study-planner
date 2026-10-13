@@ -157,7 +157,7 @@ Then open <http://localhost:8000>. On Windows, use `python` instead of `python3`
 | File | What it does |
 |---|---|
 | `index.html` | Page shell, iOS meta tags, manifest link |
-| `styles.css` | iOS 26 Liquid Glass styling, light and dark mode. Glass is only used for the floating tab bar, bar buttons, controls, sheets and toasts: a clear, vivid backdrop, an unevenly lit rim, an inner lens glow, and a sheen that drifts as you scroll. Backdrop filters are written out literally, because older Safari ignores them when they come from CSS variables. Safari can't do true refraction. Respects Reduce Transparency, Increase Contrast and Reduce Motion. |
+| `styles.css` | iOS 26 Liquid Glass styling, light and dark mode. Materials follow [@rdlabo/ionic-theme-ios26](https://github.com/rdlabo-team/ionic-theme-ios26) (pure CSS, works in Safari): controls use `blur(2px) saturate(360%)` over 72% white, the tab bar `blur(20px) saturate(180%)`, overlays 70% white with 34px corners. Motion follows [LiquiKit](https://himanshuaggarwal.com/blog/how-liquikit-works): spring easings written as CSS `linear()`, a ~3.5 Hz liquid wobble, and squash that keeps the same area. You can drag the tab bar's lens between tabs, segmented controls have sliding glass lenses, and the toggle knob turns to glass while pressed. True refraction isn't possible in Safari (it ignores SVG backdrop filters, WebKit bug 245510). Respects Reduce Transparency, Increase Contrast and Reduce Motion. |
 | `app.js` | Screens, onboarding, sheets, events |
 | `scheduler.js` | The planning engine (pure functions, no DOM) |
 | `db.js` | IndexedDB storage and `navigator.storage.persist()` |

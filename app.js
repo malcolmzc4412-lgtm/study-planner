@@ -341,6 +341,7 @@ function render() {
     if (a) window.scrollTo(0, a.getBoundingClientRect().top + window.scrollY - (110 + (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-top')) || 0)));
   }
   syncTabbar(!!root.querySelector('.screen:not(.no-tabs)'));
+  syncSegLenses(root);
   onScroll();
 }
 
@@ -356,7 +357,24 @@ function shell({ title, body, left = '', right = '', tabs = true, sub = '' }) {
 
 const TABS = [['week', 'This Week'], ['calendar', 'Calendar'], ['plan', 'Plan'], ['units', 'Units'], ['settings', 'Settings']];
 
-/** The tab bar lives outside the re-rendered view so its glass pill can slide between tabs. */
+// ---------- Liquid Glass motion ----------
+// Springs and area-preserving squash, after LiquiKit. All CSS-driven so it runs in Safari.
+
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/** Stretch a lens along its travel and squeeze it across (area preserved), then settle. */
+function squash(el, amount) {
+  if (!el.animate || reduceMotion() || amount <= 0) return;
+  const k = Math.min(0.45, amount);
+  el.animate([
+    { scale: '1 1' },
+    { scale: `${1 + k} ${1 / (1 + k)}`, offset: 0.3 },
+    { scale: `${1 - k * 0.12} ${1 + k * 0.1}`, offset: 0.62 },
+    { scale: '1 1' },
+  ], { duration: 560, easing: 'ease-out', composite: 'replace' });
+}
+
+/** The tab bar lives outside the re-rendered view so its glass lens can slide between tabs. */
 function syncTabbar(show) {
   let bar = document.getElementById('tabbar');
   if (!bar) {
@@ -368,18 +386,125 @@ function syncTabbar(show) {
     bar.innerHTML = `<span class="tab-pill" aria-hidden="true"></span>${TABS.map(([k, l]) =>
       `<button class="tab" role="tab" data-action="tab" data-tab="${k}">${ICON[k]}<span>${l}</span></button>`).join('')}`;
     document.body.append(bar);
+    enableTabDrag(bar);
   }
   bar.classList.toggle('hidden', !show);
   const prevI = Number(bar.style.getPropertyValue('--i') || -1);
   document.body.classList.toggle('has-tabs', show);
   const i = Math.max(0, TABS.findIndex(([k]) => k === ui.tab));
   bar.style.setProperty('--i', i);
-  if (prevI >= 0 && prevI !== i) { // liquid squish while the lens travels
-    const pill = bar.querySelector('.tab-pill');
-    pill.classList.remove('moving'); void pill.offsetWidth; pill.classList.add('moving');
-  }
+  if (prevI >= 0 && prevI !== i && !bar.classList.contains('dragging')) squash(bar.querySelector('.tab-pill'), 0.14 * Math.abs(i - prevI));
   bar.querySelectorAll('.tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === ui.tab)));
 }
+
+let suppressTabClick = false;
+
+/** Drag the selected lens across the tab bar (the iOS 26 gesture). */
+function enableTabDrag(bar) {
+  let drag = null;
+  const geometry = () => {
+    const r = bar.getBoundingClientRect();
+    const w = (r.width - 8) / TABS.length;
+    return { r, w };
+  };
+  const indexAt = (x, w) => clamp(Math.round(x / w), 0, TABS.length - 1);
+  bar.addEventListener('pointerdown', (e) => {
+    if (bar.classList.contains('mini') || e.button > 0) return;
+    drag = { x0: e.clientX, lastX: e.clientX, lastT: e.timeStamp, v: 0, moved: false, id: e.pointerId, ...geometry() };
+  });
+  bar.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    if (!drag.moved) {
+      if (Math.abs(e.clientX - drag.x0) < 8) return;
+      drag.moved = true;
+      try { bar.setPointerCapture(drag.id); } catch { /* ignore */ }
+      bar.classList.add('dragging');
+      bar.querySelector('.tab-pill').classList.add('lifted');
+    }
+    const pill = bar.querySelector('.tab-pill');
+    const { r, w } = drag;
+    const raw = e.clientX - r.left - 4 - w / 2;
+    const max = (TABS.length - 1) * w;
+    // Rubber-band a little past either end.
+    const x = raw < 0 ? -18 * (1 - 1 / (1 - raw / w / 2)) : raw > max ? max + 18 * (1 - 1 / (1 + (raw - max) / w / 2)) : raw;
+    const dt = Math.max(8, e.timeStamp - drag.lastT);
+    drag.v = 0.7 * drag.v + 0.3 * ((e.clientX - drag.lastX) / dt);
+    drag.lastX = e.clientX;
+    drag.lastT = e.timeStamp;
+    const sx = 1 + Math.min(0.32, Math.abs(drag.v) * 0.28); // faster = more squash, area preserved
+    pill.style.transition = 'scale 0.12s ease-out, background-color 0.2s, box-shadow 0.2s';
+    pill.style.transform = `translateX(${x}px)`;
+    pill.style.scale = `${1.22 * sx} ${1.22 / sx}`;
+    const hover = indexAt(x, w);
+    bar.querySelectorAll('.tab').forEach((b, k) => b.classList.toggle('hover', k === hover));
+  });
+  const end = (e) => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    if (!d.moved) return;
+    const pill = bar.querySelector('.tab-pill');
+    const i = indexAt(e.clientX - d.r.left - 4 - d.w / 2, d.w);
+    pill.classList.remove('lifted');
+    pill.style.transition = '';
+    pill.style.transform = '';
+    pill.style.scale = '';
+    bar.classList.remove('dragging');
+    bar.querySelectorAll('.tab').forEach((b) => b.classList.remove('hover'));
+    suppressTabClick = true;
+    setTimeout(() => { suppressTabClick = false; }, 60);
+    const tab = TABS[i][0];
+    if (tab !== ui.tab || ui.unitId) { ui.tab = tab; ui.unitId = null; if (tab === 'week') ui.week = null; render(); } else syncTabbar(true);
+  };
+  bar.addEventListener('pointerup', end);
+  bar.addEventListener('pointercancel', end);
+}
+
+/** Each segmented control gets a glass lens that glides (and squashes) to the selected segment. */
+const segPos = new Map();
+function syncSegLenses(scope = document) {
+  scope.querySelectorAll('.seg').forEach((seg) => {
+    let lens = seg.querySelector(':scope > .seg-lens');
+    if (!lens) {
+      lens = document.createElement('span');
+      lens.className = 'seg-lens';
+      lens.setAttribute('aria-hidden', 'true');
+      seg.prepend(lens);
+    }
+    const on = seg.querySelector(':scope > button[aria-pressed="true"]');
+    if (!on || !seg.offsetWidth) { lens.style.opacity = '0'; return; }
+    const key = seg.getAttribute('aria-label') || '';
+    const x = on.offsetLeft;
+    const w = on.offsetWidth;
+    const prev = lens.dataset.x != null ? { x: Number(lens.dataset.x), w: Number(lens.dataset.w) } : segPos.get(key);
+    if (!lens.dataset.x && prev) {
+      // Freshly rendered: start where the lens was, then glide.
+      lens.style.transition = 'none';
+      lens.style.transform = `translateX(${prev.x}px)`;
+      lens.style.width = `${prev.w}px`;
+      lens.style.opacity = '1';
+      void lens.offsetWidth;
+      lens.style.transition = '';
+    }
+    if (!lens.dataset.x && !prev) {
+      // First appearance: place without animating.
+      lens.style.transition = 'none';
+      lens.style.transform = `translateX(${x}px)`;
+      lens.style.width = `${w}px`;
+      void lens.offsetWidth;
+      lens.style.transition = '';
+    }
+    if (prev && Math.abs(prev.x - x) > 1) squash(lens, 0.12 * Math.abs(prev.x - x) / Math.max(w, 1));
+    lens.dataset.x = x;
+    lens.dataset.w = w;
+    if (on.dataset.v) lens.dataset.v = on.dataset.v;
+    lens.style.opacity = '1';
+    lens.style.transform = `translateX(${x}px)`;
+    lens.style.width = `${w}px`;
+    segPos.set(key, { x, w });
+  });
+}
+window.addEventListener('resize', () => syncSegLenses());
 
 // ---------- This Week ----------
 
@@ -1330,6 +1455,7 @@ function openSheet({ title, body, onSave, onCancel, saveLabel = 'Save', cancelLa
   if (replace && openSheetEl) {
     openSheetEl.sheet.querySelector('.sheet-body').innerHTML = body;
     fitSheet(openSheetEl.sheet);
+    syncSegLenses(openSheetEl.sheet);
     return;
   }
   closeSheet(true);
@@ -1350,6 +1476,7 @@ function openSheet({ title, body, onSave, onCancel, saveLabel = 'Save', cancelLa
   sheet.classList.add('open');
   openSheetEl = { sheet, backdrop, onCancel };
   fitSheet(sheet);
+  requestAnimationFrame(() => syncSegLenses(sheet));
   backdrop.addEventListener('click', () => closeSheet(false, true));
   sheet.querySelector('[data-sheet=cancel]').addEventListener('click', () => closeSheet(false, true));
   sheet.querySelector('[data-sheet=save]')?.addEventListener('click', () => { if (onSave?.(sheet) !== false) closeSheet(); });
@@ -1443,7 +1570,7 @@ function setEdit(id, patch) {
 }
 
 const actions = {
-  tab: (el) => { ui.tab = el.dataset.tab; ui.unitId = null; if (ui.tab === 'week') ui.week = null; render(); },
+  tab: (el) => { if (suppressTabClick) return; ui.tab = el.dataset.tab; ui.unitId = null; if (ui.tab === 'week') ui.week = null; render(); },
   prevWeek: () => { ui.week = (ui.week ?? displayWeek()) - 1; render(); },
   nextWeek: () => { ui.week = (ui.week ?? displayWeek()) + 1; render(); },
   thisWeek: () => { ui.week = null; render(); },
@@ -1743,6 +1870,7 @@ document.addEventListener('click', (e) => {
   if (!fn) return;
   if (el.type !== 'checkbox') e.preventDefault(); // let switches toggle
   fn(el, e);
+  if (el.closest('.seg')) syncSegLenses(el.closest('.sheet') || document);
 });
 
 document.addEventListener('change', (e) => {

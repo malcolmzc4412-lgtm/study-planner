@@ -40,8 +40,8 @@
 
   --spring: cubic-bezier(0.32, 0.72, 0, 1);
   --bounce: cubic-bezier(0.34, 1.45, 0.64, 1);
-  --radius: 26px;        /* inset grouped sections */
-  --sheet-radius: 36px;  /* sheets, concentric with the display corners */
+  --radius: 28px;        /* inset grouped sections */
+  --sheet-radius: 34px;  /* sheets and overlays (iOS 26) */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
@@ -101,70 +101,65 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
 .tnum { font-variant-numeric: tabular-nums; }
 
 /* ---------- Liquid Glass material ----------
-   Built from what reads as glass in well-made iOS 26 apps:
-   1. very clear, vivid backdrop (light blur + high saturation + a little brightness),
-   2. a rim that catches light unevenly: bright top-left, softer reflection bottom-right,
-   3. a faint inner lens glow along the edge (the glass has thickness),
-   4. a soft sheen that drifts as you scroll.
-   Backdrop filters are written out literally: older WebKit ignores
-   -webkit-backdrop-filter when its value comes from a custom property.
-   (True refraction needs an SVG displacement backdrop filter, which Safari doesn't support.) */
+   Values follow @rdlabo/ionic-theme-ios26 (pure CSS, iOS 26-accurate, works in Safari);
+   motion follows LiquiKit: springs instead of timed curves, area-preserving squash,
+   a ~3.5 Hz liquid wobble. True refraction needs an SVG backdrop filter, which Safari
+   parses but doesn't paint (WebKit bug 245510), so Safari gets frosted glass.
+   Backdrop filters are literal values: older WebKit ignores them when set via var(). */
+:root {
+  /* Springs as CSS linear() easings (damped harmonic oscillator, sampled). */
+  --spring-liquid: linear(0, 0.116, 0.362, 0.624, 0.840, 0.987, 1.066, 1.094, 1.089, 1.067, 1.042, 1.020, 1.004, 0.995, 0.991, 0.991, 0.993, 0.995, 0.998, 0.999, 1.000, 1.001, 1.001, 1.001, 1.001, 1.000, 1.000, 1.000, 1);
+  --spring-soft: linear(0, 0.060, 0.200, 0.370, 0.540, 0.691, 0.814, 0.906, 0.971, 1.012, 1.035, 1.045, 1.045, 1.041, 1.034, 1.026, 1.018, 1.012, 1.007, 1.003, 1.000, 0.999, 0.998, 0.998, 0.998, 0.998, 0.999, 0.999, 1);
+  --spring-toggle: linear(0, 0.045, 0.160, 0.315, 0.487, 0.656, 0.808, 0.936, 1.034, 1.103, 1.144, 1.161, 1.161, 1.146, 1.123, 1.096, 1.068, 1.041, 1.019, 1.001, 0.987, 0.979, 0.974, 0.973, 0.975, 0.978, 0.982, 0.987, 0.991, 0.995, 0.999, 1.001, 1);
+  --press: 140ms ease-out; /* iOS 26 press-in */
+}
+
+/* Small floating controls (bar buttons, round buttons, toasts). */
 .glass {
   position: relative; isolation: isolate;
-  background: rgba(255, 255, 255, 0.3);
-  -webkit-backdrop-filter: blur(5px) saturate(220%) brightness(1.08);
-  backdrop-filter: blur(5px) saturate(220%) brightness(1.08);
-  box-shadow:
-    inset 0 0 0 0.5px rgba(255, 255, 255, 0.4),
-    inset 1.5px 1.5px 1px -1px rgba(255, 255, 255, 0.95),
-    inset -1.5px -1.5px 1px -1px rgba(255, 255, 255, 0.6),
-    inset 0 0 12px rgba(255, 255, 255, 0.28),
-    inset 0 -8px 16px -12px rgba(0, 0, 0, 0.12),
-    0 10px 28px -8px rgba(0, 0, 0, 0.22), 0 1px 3px rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.72);
+  -webkit-backdrop-filter: blur(2px) saturate(360%);
+  backdrop-filter: blur(2px) saturate(360%);
+  box-shadow: inset 0 0 8px rgba(220, 220, 220, 0.2), 0 2px 10px -2px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
 }
-.glass::before { /* uneven specular rim: a gradient border cut out with a mask */
+.glass::before { /* 0.5-1px rim, brightest at the top-left, a softer reflection bottom-right */
   content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none; z-index: 2;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.25) 26%, rgba(255, 255, 255, 0) 48%,
-    rgba(255, 255, 255, 0.18) 70%, rgba(255, 255, 255, 0.75) 100%);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.3) 26%, rgba(255, 255, 255, 0) 48%,
+    rgba(255, 255, 255, 0.15) 72%, rgba(255, 255, 255, 0.7) 100%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
 }
-.glass::after { /* drifting sheen */
+.glass::after { /* soft sheen that drifts as content scrolls */
   content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
-  background: radial-gradient(150% 100% at calc(15% + var(--glint, 0) * 70%) -20%, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 55%);
-  opacity: 0.55; transition: opacity 0.25s;
+  background: radial-gradient(150% 100% at calc(15% + var(--glint, 0) * 70%) -20%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 55%);
+  opacity: 0.45; transition: opacity 0.2s;
 }
 @media (prefers-color-scheme: dark) {
   .glass {
-    background: rgba(44, 44, 48, 0.32);
-    -webkit-backdrop-filter: blur(6px) saturate(180%) brightness(0.82);
-    backdrop-filter: blur(6px) saturate(180%) brightness(0.82);
-    box-shadow:
-      inset 0 0 0 0.5px rgba(255, 255, 255, 0.14),
-      inset 1.5px 1.5px 1px -1px rgba(255, 255, 255, 0.45),
-      inset -1.5px -1.5px 1px -1px rgba(255, 255, 255, 0.22),
-      inset 0 0 12px rgba(255, 255, 255, 0.06),
-      0 10px 28px -8px rgba(0, 0, 0, 0.7), 0 1px 3px rgba(0, 0, 0, 0.4);
+    background: rgba(62, 62, 62, 0.42);
+    -webkit-backdrop-filter: blur(4px) saturate(250%);
+    backdrop-filter: blur(4px) saturate(250%);
+    box-shadow: inset 0 0 8px rgba(255, 255, 255, 0.04), 0 2px 12px -2px rgba(0, 0, 0, 0.6), 0 0 0 0.5px rgba(68, 68, 68, 0.9);
   }
-  .glass::before { opacity: 0.5; }
-  .glass::after { opacity: 0.16; }
+  .glass::before { opacity: 0.35; }
+  .glass::after { opacity: 0.12; }
 }
-/* Controls come to life when touched: they swell and brighten. */
-.glass.interactive { transition: transform 0.4s var(--bounce); }
-.glass.interactive:active { transform: scale(1.1); }
+
+/* Press: swell quickly (140ms), settle back on a spring. */
+.glass.interactive { transition: transform 0.6s var(--spring-liquid); will-change: transform; }
+.glass.interactive:active { transform: scale(1.28); transition: transform var(--press); }
 .glass.interactive:active::after { opacity: 0.9; }
+
 /* Prominent (tinted) glass for the primary action. */
 .glass.prominent {
-  background: rgba(0, 122, 255, 0.82); color: #fff;
-  box-shadow:
-    inset 1.5px 1.5px 1px -1px rgba(255, 255, 255, 0.8),
-    inset -1.5px -1.5px 1px -1px rgba(255, 255, 255, 0.4),
-    inset 0 0 14px rgba(255, 255, 255, 0.22),
-    0 10px 26px -8px rgba(0, 122, 255, 0.6);
+  background: rgba(0, 122, 255, 0.86); color: #fff;
+  -webkit-backdrop-filter: blur(8px) saturate(250%); backdrop-filter: blur(8px) saturate(250%);
+  box-shadow: inset 0 0 10px rgba(255, 255, 255, 0.18), 0 8px 24px -8px rgba(0, 122, 255, 0.6);
 }
-@media (prefers-color-scheme: dark) { .glass.prominent { background: rgba(10, 132, 255, 0.85); } }
-.glass.prominent::after { opacity: 0.35; }
+@media (prefers-color-scheme: dark) { .glass.prominent { background: rgba(10, 132, 255, 0.88); box-shadow: inset 0 0 10px rgba(255, 255, 255, 0.12), 0 8px 24px -8px rgba(0, 0, 0, 0.6); } }
+.glass.prominent::after { opacity: 0.3; }
+.glass.prominent.interactive:active { transform: scale(1.04); }
 
 /* ---------- Layout ---------- */
 .screen {
@@ -218,42 +213,63 @@ body.has-tabs::after {
   background: linear-gradient(to top, color-mix(in srgb, var(--bg) 85%, transparent) 0%, color-mix(in srgb, var(--bg) 40%, transparent) 50%, transparent);
 }
 
-/* ---------- Tab bar (floating Liquid Glass) ---------- */
+/* ---------- Tab bar (floating Liquid Glass) ----------
+   Bar: blur(20px) saturate(180%). Pressing a tab grows it 1.1x and the bar 1.038x.
+   The selected lens can be dragged between tabs; it lifts, squashes with speed
+   (area-preserving), then springs into place with a small liquid wobble. */
 .tabbar {
   position: fixed; z-index: 30;
   left: calc(20px + var(--safe-left)); right: calc(20px + var(--safe-right));
   bottom: calc(max(var(--safe-bottom), 12px) + 2px);
   max-width: 420px; margin: 0 auto;
-  height: 64px; border-radius: 32px; padding: 4px;
+  height: 62px; border-radius: 31px; padding: 4px;
   display: grid; grid-template-columns: repeat(5, 1fr);
-  transition: height 0.4s var(--spring), bottom 0.4s var(--spring), left 0.4s var(--spring), right 0.4s var(--spring);
+  touch-action: none; user-select: none; -webkit-user-select: none;
+  transition: height 0.5s var(--spring-soft), left 0.5s var(--spring-soft), right 0.5s var(--spring-soft), transform 0.5s var(--spring-liquid);
 }
-.tabbar.glass { background: rgba(255, 255, 255, 0.42); }
-@media (prefers-color-scheme: dark) { .tabbar.glass { background: rgba(40, 40, 44, 0.45); } }
-.tab-pill { /* the selected-tab lens: brighter glass that slides and squishes between tabs */
-  position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / 5);
-  border-radius: 28px; z-index: 0;
+.tabbar.glass {
   background: rgba(255, 255, 255, 0.55);
-  box-shadow: inset 1px 1px 1px -0.5px rgba(255, 255, 255, 1), inset -1px -1px 1px -0.5px rgba(255, 255, 255, 0.7),
-    inset 0 0 10px rgba(255, 255, 255, 0.5), 0 2px 8px rgba(0, 0, 0, 0.1);
-  transform: translateX(calc(var(--i, 0) * 100%));
-  transition: transform 0.55s var(--bounce);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: inset 0 0 8px rgba(220, 220, 220, 0.2), 0 10px 30px -8px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.05);
 }
 @media (prefers-color-scheme: dark) {
-  .tab-pill { background: rgba(255, 255, 255, 0.14); box-shadow: inset 1px 1px 1px -0.5px rgba(255, 255, 255, 0.5), inset 0 0 10px rgba(255, 255, 255, 0.08); }
+  .tabbar.glass {
+    background: rgba(62, 62, 62, 0.34);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    box-shadow: inset 0 0 8px rgba(255, 255, 255, 0.04), 0 10px 30px -8px rgba(0, 0, 0, 0.7), 0 0 0 0.5px rgba(68, 68, 68, 0.9);
+  }
 }
-.tab-pill.moving { animation: lens-squish 0.55s var(--spring); }
-@keyframes lens-squish { 0% { scale: 1 1; } 35% { scale: 1.22 0.86; } 70% { scale: 0.97 1.04; } 100% { scale: 1 1; } }
-.tabbar:active .tab-pill { scale: 1.08; transition: transform 0.55s var(--bounce), scale 0.3s var(--bounce); }
+.tabbar:has(.tab:active), .tabbar.dragging { transform: scale(1.038); transition: transform var(--press), height 0.5s var(--spring-soft); }
+
+.tab-pill { /* the selected lens */
+  position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / 5);
+  border-radius: 27px; z-index: 0;
+  background: rgba(120, 120, 128, 0.14);
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.6);
+  transform: translateX(calc(var(--i, 0) * 100%));
+  transition: transform 0.55s var(--spring-liquid), scale 0.45s var(--spring-soft), background-color 0.2s, box-shadow 0.2s;
+}
+@media (prefers-color-scheme: dark) { .tab-pill { background: rgba(255, 255, 255, 0.1); box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.18); } }
+/* Lifted while dragged: a clear, magnifying lens that grows past the bar. */
+.tab-pill.lifted {
+  scale: 1.22; background: rgba(255, 255, 255, 0.38);
+  box-shadow: inset 1.5px 1.5px 1px -1px rgba(255, 255, 255, 1), inset -1.5px -1.5px 1px -1px rgba(255, 255, 255, 0.7),
+    inset 0 0 12px rgba(255, 255, 255, 0.5), 0 8px 22px -6px rgba(0, 0, 0, 0.28);
+}
+@media (prefers-color-scheme: dark) {
+  .tab-pill.lifted { background: rgba(255, 255, 255, 0.16); box-shadow: inset 1px 1px 1px -0.5px rgba(255, 255, 255, 0.5), inset 0 0 12px rgba(255, 255, 255, 0.08), 0 8px 22px -6px rgba(0, 0, 0, 0.7); }
+}
 .tab {
   position: relative; z-index: 1;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  border-radius: 28px; color: var(--label); font-size: 10px; font-weight: 600; min-height: 44px;
-  transition: color 0.2s, transform 0.35s var(--bounce);
+  border-radius: 27px; color: var(--label); font-size: 10px; font-weight: 600; min-height: 44px;
+  transition: color 0.2s, transform 0.5s var(--spring-liquid);
 }
-.tab:active { transform: scale(1.1); }
-.tab svg { width: 26px; height: 26px; transition: transform 0.4s var(--spring); }
-.tab span { transition: opacity 0.2s, max-height 0.3s var(--spring); max-height: 14px; overflow: hidden; }
+.tab:active, .tab.hover { transform: scale(1.1); transition: color 0.2s, transform var(--press); }
+.tab svg { width: 26px; height: 26px; transition: transform 0.5s var(--spring-soft); }
+.tab span { transition: opacity 0.2s, max-height 0.35s var(--spring-soft); max-height: 14px; overflow: hidden; }
 .tab[aria-selected="true"] { color: var(--blue); }
 /* Minimises while scrolling down, expands again when scrolling up. */
 .tabbar.mini { height: 50px; left: calc(40px + var(--safe-left)); right: calc(40px + var(--safe-right)); }
@@ -304,51 +320,72 @@ body.has-tabs::after {
 .btn {
   display: flex; align-items: center; justify-content: center; gap: 6px;
   width: 100%; min-height: 52px; border-radius: 26px; font-weight: 600; font-size: 17px;
-  background: var(--blue); color: #fff; transition: transform 0.35s var(--bounce), opacity 0.15s;
+  background: var(--blue); color: #fff; transition: transform 0.6s var(--spring-liquid), opacity 0.15s;
 }
-.btn:active { transform: scale(1.03); }
+.btn:active { transform: scale(1.04); transition: transform var(--press); }
 .btn.secondary { background: var(--fill); color: var(--blue); }
 .btn.plain { background: none; color: var(--blue); }
 .btn.danger { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
 .btn:disabled { opacity: 0.4; pointer-events: none; }
 .btn-row { display: flex; gap: 10px; }
 
-.seg {
+.seg { /* segmented control with a sliding glass lens */
+  position: relative; isolation: isolate;
   display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 3px;
   background: var(--fill); border-radius: 20px; width: 100%;
 }
 .seg button {
+  position: relative; z-index: 1;
   min-height: 36px; border-radius: 17px; font-size: 15px; font-weight: 500;
-  transition: background-color 0.25s var(--spring), box-shadow 0.25s, transform 0.35s var(--bounce);
+  transition: color 0.2s, font-weight 0.2s;
 }
-.seg button:active { transform: scale(1.06); }
-.seg button[aria-pressed="true"] {
-  background: var(--seg-selected); font-weight: 600;
-  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.7), 0 3px 10px rgba(0, 0, 0, 0.12);
+.seg button[aria-pressed="true"] { font-weight: 600; }
+.seg-lens {
+  position: absolute; z-index: 0; top: 3px; bottom: 3px; left: 0; width: 0; opacity: 0;
+  border-radius: 17px; background: #FFFFFF; pointer-events: none;
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.9), 0 3px 10px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  transition: transform 0.55s var(--spring-liquid), width 0.55s var(--spring-liquid), scale 0.45s var(--spring-soft),
+    background-color 0.2s, opacity 0.2s;
+}
+/* Pressing turns the lens into clear glass that swells past the track. */
+.seg:active .seg-lens {
+  scale: 1.12 1.3; background: rgba(255, 255, 255, 0.5);
+  box-shadow: inset 1.5px 1.5px 1px -1px rgba(255, 255, 255, 1), inset -1px -1px 1px -0.5px rgba(255, 255, 255, 0.7),
+    inset 0 0 10px rgba(255, 255, 255, 0.5), 0 6px 16px -4px rgba(0, 0, 0, 0.22);
+  transition: transform 0.55s var(--spring-liquid), width 0.55s var(--spring-liquid), scale var(--press), background-color 0.15s;
+}
+@media (prefers-color-scheme: dark) {
+  .seg-lens { background: #636366; box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.25), 0 3px 10px rgba(0, 0, 0, 0.3); }
+  .seg:active .seg-lens { background: rgba(255, 255, 255, 0.2); box-shadow: inset 1px 1px 1px -0.5px rgba(255, 255, 255, 0.5), inset 0 0 10px rgba(255, 255, 255, 0.08), 0 6px 16px -4px rgba(0, 0, 0, 0.6); }
 }
 .seg button:disabled { opacity: 0.3; }
 .row .seg { flex: 1; }
+.row .seg { flex: 1; }
 
-/* Switch: the knob turns into a stretched glass droplet while pressed. */
+/* Switch (63x28 track, 37x24 knob): the knob turns into a swollen glass droplet while
+   pressed and springs across on release (700ms spring, like iOS 26). */
 .switch {
   appearance: none; -webkit-appearance: none; flex: none;
   width: 63px; height: 28px; border-radius: 14px; background: var(--fill2); position: relative;
-  transition: background-color 0.25s;
+  transition: background-color 0.3s ease;
 }
 .switch::after {
   content: ""; position: absolute; top: 2px; left: 2px; width: 37px; height: 24px; border-radius: 12px;
   background: #fff; box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 1px 1px rgba(0, 0, 0, 0.12);
-  transition: transform 0.35s var(--bounce), width 0.3s var(--spring), background-color 0.2s, box-shadow 0.2s;
+  transition: transform 0.7s var(--spring-toggle), width 0.35s var(--spring-soft), scale 0.45s var(--spring-soft),
+    background-color 0.2s, box-shadow 0.2s;
 }
 .switch:checked { background: var(--green); }
 .switch:checked::after { transform: translateX(22px); }
 .switch:active::after {
-  width: 45px; transform: scale(1.18);
-  background: rgba(255, 255, 255, 0.4);
-  -webkit-backdrop-filter: blur(2px) saturate(180%); backdrop-filter: blur(2px) saturate(180%);
-  box-shadow: var(--glass-rim), 0 4px 12px rgba(0, 0, 0, 0.18);
+  width: 45px; scale: 1.3;
+  background: rgba(255, 255, 255, 0.35);
+  -webkit-backdrop-filter: blur(1px) saturate(300%); backdrop-filter: blur(1px) saturate(300%);
+  box-shadow: inset 1.5px 1.5px 1px -1px rgba(255, 255, 255, 1), inset -1px -1px 1px -0.5px rgba(255, 255, 255, 0.7),
+    inset 0 0 8px rgba(255, 255, 255, 0.6), 0 4px 12px rgba(0, 0, 0, 0.18);
+  transition: transform 0.7s var(--spring-toggle), width var(--press), scale var(--press), background-color 0.1s;
 }
-.switch:checked:active::after { transform: translateX(14px) scale(1.18); }
+.switch:checked:active::after { transform: translateX(14px); }
 
 .stepper { display: inline-flex; background: var(--fill); border-radius: 20px; overflow: hidden; flex: none; }
 .stepper button { width: 48px; height: 38px; font-size: 22px; line-height: 1; color: var(--label); transition: background-color 0.15s; }
@@ -369,9 +406,9 @@ body.has-tabs::after {
 }
 .check span {
   width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--uc, var(--blue));
-  display: grid; place-items: center; transition: background-color 0.2s, transform 0.35s var(--bounce);
+  display: grid; place-items: center; transition: background-color 0.2s, transform 0.5s var(--spring-liquid);
 }
-.check span svg { width: 14px; height: 14px; color: #fff; opacity: 0; transform: scale(0.5); transition: opacity 0.15s, transform 0.3s var(--bounce); }
+.check span svg { width: 14px; height: 14px; color: #fff; opacity: 0; transform: scale(0.5); transition: opacity 0.15s, transform 0.5s var(--spring-liquid); }
 .check.on span { background: var(--uc, var(--blue)); }
 .check.on span svg { opacity: 1; transform: scale(1); }
 .check.half span { background: linear-gradient(to top, var(--uc, var(--blue)) 50%, transparent 50%); }
@@ -412,7 +449,7 @@ details[open] .chev { transform: rotate(90deg); }
 .timeline { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .week-card {
   display: block; width: 100%; text-align: left; background: var(--card); border-radius: 22px; padding: 14px 16px;
-  border: 2px solid transparent; transition: transform 0.3s var(--bounce);
+  border: 2px solid transparent; transition: transform 0.5s var(--spring-liquid);
 }
 .week-card:active { transform: scale(0.98); }
 .week-card.current { border-color: var(--blue); }
@@ -461,7 +498,7 @@ details[open] .chev { transform: rotate(90deg); }
 .wk {
   min-height: 56px; border-radius: 16px; background: var(--card); padding: 6px; text-align: center;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  transition: transform 0.3s var(--bounce);
+  transition: transform 0.5s var(--spring-liquid);
 }
 .wk:active { transform: scale(1.06); }
 .wk b { font-size: 15px; }
@@ -477,7 +514,7 @@ details[open] .chev { transform: rotate(90deg); }
 .day-chip {
   min-height: 48px; border-radius: 16px; background: var(--fill); color: var(--label);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
-  font-size: 11px; font-weight: 600; transition: background-color 0.2s var(--spring), transform 0.3s var(--bounce);
+  font-size: 11px; font-weight: 600; transition: background-color 0.2s var(--spring), transform 0.5s var(--spring-liquid);
 }
 .day-chip span { color: var(--label2); font-weight: 600; }
 .day-chip b { font-size: 16px; font-variant-numeric: tabular-nums; }
@@ -498,9 +535,10 @@ details[open] .chev { transform: rotate(90deg); }
 .strip i { width: 12px; height: 12px; border-radius: 4px; background: var(--rc, var(--fill2)); }
 .strip i.none { background: var(--fill2); }
 .rd-brush { margin: 4px 0 10px; }
-.rd-brush button[data-v="1"][aria-pressed="true"] { background: var(--red); color: #fff; }
-.rd-brush button[data-v="2"][aria-pressed="true"] { background: var(--orange); color: #fff; }
-.rd-brush button[data-v="3"][aria-pressed="true"] { background: var(--green); color: #fff; }
+.rd-brush button[aria-pressed="true"] { color: #fff; }
+.rd-brush .seg-lens[data-v="1"] { background: var(--red); }
+.rd-brush .seg-lens[data-v="2"] { background: var(--orange); }
+.rd-brush .seg-lens[data-v="3"] { background: var(--green); }
 .rd-grid { display: grid; gap: 6px; align-items: stretch; user-select: none; -webkit-user-select: none; }
 .rd-head { font-size: 12px; font-weight: 700; text-align: center; color: var(--uc); padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rd-week { display: flex; flex-direction: column; justify-content: center; min-height: 46px; padding-left: 4px; }
@@ -509,7 +547,7 @@ details[open] .chev { transform: rotate(90deg); }
 .rd-cell {
   min-height: 46px; border-radius: 14px; background: var(--fill); touch-action: none;
   display: grid; place-items: center; font-size: 12px; font-weight: 700; color: var(--label3);
-  transition: background-color 0.18s, transform 0.3s var(--bounce), color 0.18s;
+  transition: background-color 0.18s, transform 0.5s var(--spring-liquid), color 0.18s;
 }
 .rd-cell:active { transform: scale(1.08); }
 .rd-cell.r1, .rd-cell.r2, .rd-cell.r3 { background: color-mix(in srgb, var(--rc) 85%, transparent); color: #fff; }
@@ -517,7 +555,7 @@ details[open] .chev { transform: rotate(90deg); }
 .rd-quick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .rd-quick button {
   min-height: 40px; border-radius: 14px; background: var(--fill); font-size: 14px; font-weight: 600;
-  transition: transform 0.3s var(--bounce), background-color 0.18s;
+  transition: transform 0.5s var(--spring-liquid), background-color 0.18s;
 }
 .rd-quick button:active { transform: scale(1.06); }
 .rd-quick button[aria-pressed="true"] { background: var(--rc); color: #fff; }
@@ -535,7 +573,7 @@ textarea.notes { width: 100%; resize: vertical; min-height: 66px; line-height: 1
 .cal-wk { font-size: 10px; font-weight: 600; color: var(--label3); display: grid; place-items: center; padding-bottom: 12px; }
 .cal-day {
   min-height: 54px; display: flex; flex-direction: column; align-items: center; gap: 3px; padding-top: 3px;
-  border-radius: 14px; transition: transform 0.3s var(--bounce);
+  border-radius: 14px; transition: transform 0.5s var(--spring-liquid);
 }
 .cal-day:active { transform: scale(1.08); }
 .cal-day b {
@@ -588,12 +626,12 @@ textarea.notes { width: 100%; resize: vertical; min-height: 66px; line-height: 1
   max-height: calc(100dvh - var(--safe-top) - 24px);
   display: flex; flex-direction: column;
   border-radius: var(--sheet-radius);
-  background: rgba(250, 250, 252, 0.74);
-  -webkit-backdrop-filter: blur(28px) saturate(190%); backdrop-filter: blur(28px) saturate(190%);
-  box-shadow: var(--glass-rim), 0 -6px 40px rgba(0, 0, 0, 0.22);
-  transform: translateY(calc(100% + 40px)); transition: transform 0.45s var(--spring), left 0.3s var(--spring), right 0.3s var(--spring), bottom 0.3s var(--spring), border-radius 0.3s var(--spring), background-color 0.3s;
+  background: rgba(255, 255, 255, 0.7);
+  -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.8), 0 12px 28px rgba(0, 0, 0, 0.17);
+  transform: translateY(calc(100% + 40px)); transition: transform 0.55s var(--spring-soft), left 0.3s var(--spring), right 0.3s var(--spring), bottom 0.3s var(--spring), border-radius 0.3s var(--spring), background-color 0.3s;
 }
-@media (prefers-color-scheme: dark) { .sheet:not(.full) { background: rgba(30, 30, 32, 0.78); } }
+@media (prefers-color-scheme: dark) { .sheet:not(.full) { background: rgba(44, 44, 46, 0.7); box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 12px 28px rgba(0, 0, 0, 0.5); } }
 .sheet.full {
   left: 0; right: 0; bottom: 0; border-radius: var(--sheet-radius) var(--sheet-radius) 0 0;
   background: var(--bg);
@@ -609,17 +647,19 @@ textarea.notes { width: 100%; resize: vertical; min-height: 66px; line-height: 1
   overscroll-behavior: contain;
 }
 .sheet.full .sheet-body { padding-bottom: calc(var(--safe-bottom) + 24px); }
-/* Concentric with the sheet: 36px corner minus 14px padding. */
-.sheet .group { border-radius: 22px; }
+/* Concentric with the sheet: 34px corner minus 14px padding. */
+.sheet .group { border-radius: 20px; }
 .sheet .seg button { font-size: 14px; }
 
 /* ---------- Toast ---------- */
 .toast {
   position: fixed; left: 50%; top: calc(var(--safe-top) + 10px); z-index: 60;
-  transform: translate(-50%, -160%); transition: transform 0.5s var(--bounce);
+  transform: translate(-50%, -160%); transition: transform 0.6s var(--spring-liquid);
   padding: 12px 20px; border-radius: 24px; font-size: 15px; font-weight: 500; max-width: calc(100% - 32px);
 }
 .toast.show { transform: translate(-50%, 0); }
+.toast.glass { background: rgba(255, 255, 255, 0.7); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%); }
+@media (prefers-color-scheme: dark) { .toast.glass { background: rgba(62, 62, 62, 0.6); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%); } }
 
 .empty { text-align: center; color: var(--label2); padding: 28px 16px; }
 .view-enter { animation: fadeUp 0.3s var(--spring); }
@@ -636,7 +676,10 @@ textarea.notes { width: 100%; resize: vertical; min-height: 66px; line-height: 1
   }
   .glass, .tabbar.glass { background: var(--card2); }
   .glass::before { display: none; }
-  .tab-pill { background: var(--fill2); box-shadow: none; }
+  .tab-pill, .tab-pill.lifted { background: var(--fill2); box-shadow: none; }
+  .seg:active .seg-lens { background: var(--card); }
+  .switch:active::after { background: #fff; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+  .toast.glass, .tabbar.glass { background: var(--card2) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
   .glass::after { display: none; }
   .glass.prominent { background: var(--blue); }
   .sheet { background: var(--bg); }
